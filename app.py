@@ -367,7 +367,7 @@ def create_review_challenge(kid):
 # ==================== 复习题目生成 ====================
 
 def render_qa_cards(raw_text):
-    """渲染练习题：按 --- 拆题，每道题一个 expander"""
+    """渲染练习题：选项直接显示，答案/解析折叠"""
     if not raw_text:
         return
     blocks = raw_text.split("---")
@@ -377,12 +377,40 @@ def render_qa_cards(raw_text):
         block = block.strip()
         if not block or "Q:" not in block:
             continue
-        # 提取题目首行
         lines = block.split("\n")
-        title = lines[0].strip()[:40] if lines else f"第{qi+1}题"
+        question = ""
+        options = []
+        answer = ""
+        explain = ""
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            if line.startswith("Q:") or line.startswith("Q："):
+                question = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            elif line.startswith(("A)", "A.", "A、", "B)", "B.", "C)", "C.", "D)", "D.")):
+                options.append(line)
+            elif line.startswith("ANSWER:") or line.startswith("答案:"):
+                answer = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            elif line.startswith("EXPLAIN:") or line.startswith("解析:"):
+                explain = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            elif not line.startswith(("[ANSWER", "[QUIZ", "[END", "[KNOWLEDGE")):
+                if answer:  # 解析后续行
+                    explain += " " + line
+                elif not question:
+                    question = line
         with cols[qi % 2]:
-            with st.expander(title, expanded=False):
-                st.markdown(block)
+            st.markdown(f"<div style='background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04);min-height:220px;'>", unsafe_allow_html=True)
+            st.caption(f"第{qi+1}题")
+            st.markdown(question[:300])
+            if options:
+                st.markdown("\n".join(options[:4]))
+            if answer or explain:
+                with st.expander("📖 答案与解析", expanded=False):
+                    if answer:
+                        st.markdown(f"**正确答案**: {answer}")
+                    if explain:
+                        st.markdown(explain[:500])
+            st.markdown("</div>", unsafe_allow_html=True)
         qi += 1
         if qi >= 2:
             break
@@ -585,13 +613,13 @@ def run_pipeline(query, results, model_name, img_data=None):
     system_prompt = f"""你是考研数学辅导专家。一次性完成以下任务，严格按标签输出：
 
 [ANSWER]
-根据参考资料回答问题。{"按 Skill 要求格式输出。" if skill_prompt else "用LaTeX写公式，回答简洁准确。"}
+根据参考资料回答问题。{"按 Skill 要求格式输出。" if skill_prompt else "用LaTeX写公式（$...$），回答简洁准确。"}
 
 [KNOWLEDGE]
 输出问题涉及的知识点文档名（多个用逗号分隔，如 004-导数的定义与几何意义.md, 012-定积分的定义与性质.md）。直接写文件名。
 
 [QUIZ]
-生成2道选择题，每题用 --- 分隔，格式：
+生成2道选择题，每题用 --- 分隔。数学公式用 $...$ 括起来。格式：
 Q: 题目
 A) 选项
 B) 选项
@@ -1252,8 +1280,7 @@ with tab2:
                     if st.button(f"🎲 出题", key=gen_key):
                         gen_r = generate_review_questions([{"knowledge_id": c['knowledge_id']}])
                         if gen_r.get("success"):
-                            st.markdown(f"#### 📝 {c['knowledge_id'][:30]} 练习题")
-                            st.markdown(gen_r['questions'])
+                            render_qa_cards(gen_r['questions'])
 
         if not candidates:
             st.success("🎉 暂无待复习知识点。使用问答后自动添加。")

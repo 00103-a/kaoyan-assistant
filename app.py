@@ -367,21 +367,22 @@ def create_review_challenge(kid):
 # ==================== 复习题目生成 ====================
 
 def render_qa_cards(raw_text):
-    """渲染练习题：2列卡片 + 嵌套expander答案"""
+    """渲染练习题：按 --- 拆题，每道题一个 expander"""
     if not raw_text:
         return
-    st.markdown("#### 📝 配套练习题")
-    # 简单渲染：按 ## 拆题目，每道题一个 expander
-    parts = raw_text.split("## ")
+    blocks = raw_text.split("---")
     cols = st.columns(2)
     qi = 0
-    for part in parts:
-        part = part.strip()
-        if not part or not part[0].isdigit():
+    for block in blocks:
+        block = block.strip()
+        if not block or "Q:" not in block:
             continue
+        # 提取题目首行
+        lines = block.split("\n")
+        title = lines[0].strip()[:40] if lines else f"第{qi+1}题"
         with cols[qi % 2]:
-            with st.expander(f"第{qi+1}题: {part.split(chr(10))[0][:30]}", expanded=False):
-                st.markdown(part)
+            with st.expander(title, expanded=False):
+                st.markdown(block)
         qi += 1
         if qi >= 2:
             break
@@ -541,75 +542,86 @@ def classify_query(query):
     except:
         return "math"
 
+def parse_multi_output(raw_text):
+    """解析 LLM 一次输出的 [ANSWER]/[KNOWLEDGE]/[QUIZ]"""
+    def extract(begin, end):
+        if begin in raw_text and end in raw_text:
+            return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
+        return ""
+    return {
+        "answer": extract("[ANSWER]", "[KNOWLEDGE]") or extract("[ANSWER]", "[QUIZ]") or raw_text[:1500],
+        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "[QUIZ]").split(",") if k.strip()],
+        "quiz": extract("[QUIZ]", "[END]")
+    }
+
 def run_pipeline(query, results, model_name, img_data=None):
-    """多Agent管线: Router → Specialist → 回答"""
+    """多Agent管线: Math 合并一次调用 / English&Politics 原逻辑"""
     pipeline_log = []
     
     # ① Router 分类
     qtype = classify_query(query)
     pipeline_log.append(f"🧭 Router → {qtype}")
     
-    # ② 根据类型选择 Specialist
-    if qtype == "english":
-        system_override = ENGLISH_PROMPT
-        use_retrieval = False
-    elif qtype == "politics":
-        system_override = POLITICS_PROMPT
-        use_retrieval = False
-    else:  # math
-        system_override = None  # 使用默认数学prompt
-        use_retrieval = True
-    
-    # ③ 注入 Skill
-    skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
-    
-    if use_retrieval and results:
-        context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in results[:3]])
-        if system_override:
-            system_prompt = system_override
-        else:
-            system_prompt = """你是考研数学辅导专家。严格基于参考资料解题，用LaTeX写公式。"""
-        system_prompt = (skill_prompt + "\n\n---\n\n" + system_prompt) if skill_prompt else system_prompt
-        user_prompt = f"【问题】\n{query}\n\n【参考资料】\n{context}\n\n请根据以上资料回答："
-        max_tokens = 800
-    else:
-        if system_override:
-            system_prompt = system_override
-        else:
-            system_prompt = """你是考研数学辅导专家。所有数学公式用LaTeX格式：行内 $...$，独立 $$...$$。回答简洁准确。"""
+    # ② English / Politics: 保持原快速路径
+    if qtype in ("english", "politics"):
+        system_override = ENGLISH_PROMPT if qtype == "english" else POLITICS_PROMPT
+        skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
+        system_prompt = system_override
         system_prompt = (skill_prompt + "\n\n---\n\n" + system_prompt) if skill_prompt else system_prompt
         user_prompt = f"【问题】\n{query}\n\n请直接回答："
-        max_tokens = 1200
+        data = {"model": model_name, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_tokens": 1200, "temperature": 0.3}
+        req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                answer = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
+        except:
+            answer = query
+        return {"answer": answer, "knowledge": [], "quiz": "", "qtype": qtype, "pipeline_log": pipeline_log}
     
-    # ④ 调用LLM
-    if img_data:
-        user_content = [
-            {"type": "text", "text": user_prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-        ]
-    else:
-        user_content = user_prompt
+    # ③ Math: 一次调用出全部
+    skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
+    context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in results[:3]]) if results else ""
 
-    data = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ],
-        "max_tokens": max_tokens, "temperature": 0.3
-    }
-    req = urllib.request.Request(API_BASE + "/chat/completions",
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-        method='POST')
-    
+    system_prompt = f"""你是考研数学辅导专家。一次性完成以下任务，严格按标签输出：
+
+[ANSWER]
+根据参考资料回答问题。{"按 Skill 要求格式输出。" if skill_prompt else "用LaTeX写公式，回答简洁准确。"}
+
+[KNOWLEDGE]
+输出问题涉及的知识点文档名（多个用逗号分隔，如 004-导数的定义与几何意义.md, 012-定积分的定义与性质.md）。直接写文件名。
+
+[QUIZ]
+生成2道选择题，每题用 --- 分隔，格式：
+Q: 题目
+A) 选项
+B) 选项
+C) 选项
+D) 选项
+ANSWER: 正确选项字母
+EXPLAIN: 详细解析（含步骤和公式）
+---
+[END]
+
+{skill_prompt if skill_prompt else ""}
+
+参考资料：
+{context}"""
+
+    user_content = [{"type": "text", "text": f"问题：{query}"}] if not img_data else [
+        {"type": "text", "text": f"问题：{query}"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
+    ]
+    data = {"model": model_name, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "max_tokens": 2500, "temperature": 0.3}
+    req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            answer = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            raw = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
+            result = parse_multi_output(raw)
+            result["qtype"] = qtype
+            result["pipeline_log"] = pipeline_log
+            return result
     except:
-        answer = fallback_answer(query, results if use_retrieval else [])
-    
-    return answer, qtype, pipeline_log
+        return {"answer": f"【问题】\n{query}\n\n请直接回答：", "knowledge": [], "quiz": "", "qtype": qtype, "pipeline_log": pipeline_log}
 
 # ==================== LLM调用 ====================
 
@@ -1137,54 +1149,40 @@ with mid_col:
     query = st.text_input("🔍 输入你的考研问题", placeholder="例如：什么是导数？", key="query_input")
 
     if query:
-        with st.spinner("🔎 检索知识库中..."):
+        with st.spinner("🤖 AI 思考中..."):
             add_thinking(f"查询: {query[:30]}...")
             results = search_corpus(query, corpus, top_k=3)
-            st.session_state.current_knowledge_ids = [r['id'] for r in results]
+            output = run_pipeline(query, results, st.session_state.selected_model)
 
-            # 始终调用LLM（有结果用RAG，无结果用纯LLM）
-            with st.spinner("🧭 Router 分类中..."):
-                if results:
-                    add_thinking(f"找到 {len(results)} 个相关文档")
-                else:
-                    add_thinking("无本地知识，使用LLM自身知识")
-                answer, qtype, pipeline_log = run_pipeline(query, results, st.session_state.selected_model)
+        # AI回答
+        st.markdown('<div class="qa-card">', unsafe_allow_html=True)
+        st.markdown("### 💡 回答")
+        st.markdown(output.get("answer", ""))
+        st.markdown('</div>', unsafe_allow_html=True)
+        add_thinking(f"回答完成")
+        log_visit("提问", f"{query[:50]}")
 
-            # AI回答
-            st.markdown("### 💡 AI回答")
-            st.markdown(answer)
-            add_thinking(f"回答完成 ({qtype})")
+        # 知识点归纳（从 LLM 输出中直接提取）
+        if output.get("knowledge"):
+            for kid in output["knowledge"]:
+                update_memory(kid, False, error_type="自动归纳")
+            add_thinking(f"自动归纳知识点: {output['knowledge']}")
+            st.session_state._matched_knowledge = output["knowledge"]
 
-            # 模糊问题自动归纳到复习池（同一次问答只归一次）
-            if not results and query != st.session_state.get("_last_autoclass", ""):
-                matched = smart_match_knowledge(query)
-                if matched:
-                    for kid in matched:
-                        update_memory(kid, False, error_type="自动归纳")
-                    add_thinking(f"自动归纳知识点: {matched}")
-                st.session_state._last_autoclass = query
+        # 参考来源
+        if results:
+            st.markdown("### 📋 使用的参考资料")
+            ref_html = ""
+            for r in results:
+                ref_html += f"<span class='ref-tag'>📄 {r['id']} ×{r['score']}</span>"
+            st.markdown(ref_html, unsafe_allow_html=True)
+        else:
+            st.caption("📡 回答来自LLM自身知识")
 
-            # 参考来源（仅在有检索结果时显示）
-            if results:
-                st.markdown("### 📋 使用的参考资料")
-                ref_html = ""
-                for r in results:
-                    ref_html += f"<span style='display:inline-block;background:#f0f4ff;padding:3px 8px;border-radius:4px;margin:2px 4px;font-size:12px;'>📄 {r['id']} <b style='color:#22c55e;'>×{r['score']}</b></span>"
-                st.markdown(ref_html, unsafe_allow_html=True)
-            else:
-                st.caption("📡 回答来自LLM自身知识")
-
-            # 自动生成练习题
-            with st.spinner("🎲 自动生成练习题..."):
-                if results:
-                    kps = [{"knowledge_id": r["id"]} for r in results[:2]]
-                else:
-                    matched = smart_match_knowledge(query)
-                    kps = [{"knowledge_id": m} for m in matched[:2]] if matched else []
-                if kps:
-                    gen_result = generate_review_questions(kps)
-                    if gen_result.get("success"):
-                        render_qa_cards(gen_result['questions'])
+        # 练习题
+        if output.get("quiz"):
+            st.markdown("#### 📝 配套练习题")
+            render_qa_cards(output["quiz"])
 
             # 评价按钮
             st.markdown("### 这个回答对你有帮助吗？")
@@ -1200,21 +1198,17 @@ with mid_col:
                             for kid in matched:
                                 update_memory(kid, True)
                             add_thinking(f"智能匹配知识点: {matched}")
-                        else:
-                            update_memory(query[:30], True)
                     add_thinking("用户点击: 掌握了")
                     st.success("已记录为掌握！")
             with col2:
                 if st.button("📚 加入复习库", use_container_width=True):
-                    if results:
-                        for r in results:
-                            update_memory(r['id'], False, error_type="用户标记")
+                    matched = st.session_state.get("_matched_knowledge") or smart_match_knowledge(query)
+                    if matched:
+                        for kid in matched:
+                            update_memory(kid, False, error_type="用户标记")
+                        st.success(f"已加入复习库 ({len(matched)}个知识点)")
                     else:
-                        matched = smart_match_knowledge(query)
-                        if matched:
-                            for kid in matched:
-                                update_memory(kid, False, error_type="用户标记")
-                    st.success("已加入复习库")
+                        st.info("未匹配到具体知识点")
                     log_visit("加入复习库", query[:50])
                     st.rerun()
 

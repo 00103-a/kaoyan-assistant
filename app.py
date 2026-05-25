@@ -632,6 +632,8 @@ Q: 题目2
 
 {skill_prompt if skill_prompt else ""}
 
+**注意: 无论回答格式如何，必须输出 [ANSWER]、[KNOWLEDGE]、[QUIZ] 全部部分。**
+
 参考资料：
 {context}"""
 
@@ -1153,6 +1155,7 @@ with mid_col:
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
         st.markdown("### 💡 回答")
         st.markdown(output.get("answer", ""))
+        st.components.v1.html("<script>MathJax.typesetPromise()</script>", height=0)
         st.markdown('</div>', unsafe_allow_html=True)
         add_thinking(f"回答完成")
         log_visit("提问", f"{query[:50]}")

@@ -413,8 +413,8 @@ def render_qa_cards(raw_text, columns=2):
                         st.markdown(f"**正确答案**: {answer}")
                     if explain:
                         st.markdown(explain[:500])
-                    st.components.v1.html("<script>MathJax.typesetPromise()</script>", height=0)
             st.markdown("</div>", unsafe_allow_html=True)
+            st.components.v1.html("<script>MathJax.typesetPromise()</script>", height=0)
         qi += 1
         if qi >= 2:
             break
@@ -1098,19 +1098,11 @@ with left_col:
     # Skill 技能切换
     st.markdown("### 🎯 回答方式")
     all_skills = load_all_skills()
-    if "active_skills" not in st.session_state:
-        st.session_state.active_skills = list(all_skills.keys())
-    
     if all_skills:
-        for skill_name, skill_meta in all_skills.items():
-            is_active = skill_name in st.session_state.active_skills
-            if st.toggle(f"**{skill_meta.get('label', skill_name)}**  ", value=is_active, key=f"skill_{skill_name}", help=skill_meta.get("description", "")):
-                if skill_name not in st.session_state.active_skills:
-                    st.session_state.active_skills.append(skill_name)
-            else:
-                if skill_name in st.session_state.active_skills:
-                    st.session_state.active_skills.remove(skill_name)
-        st.caption(f"已激活: {len(st.session_state.active_skills)}/{len(all_skills)}")
+        options = ["无 (默认)"] + list(all_skills.keys())
+        labels = ["无 (默认)"] + [f"{m.get('label', n)}" for n, m in all_skills.items()]
+        choice = st.selectbox("选择回答风格", range(len(options)), format_func=lambda x: labels[x])
+        st.session_state.active_skills = [options[choice]] if choice > 0 else []
     else:
         st.caption("`skills/` 目录下暂无 Skill")
     st.markdown("---")

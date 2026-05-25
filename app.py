@@ -423,13 +423,9 @@ def generate_review_questions(knowledge_points):
         kb_list = "\n".join([f"{i+1}. {kp['knowledge_id']}" for i, kp in enumerate(knowledge_points[:3])])
 
         system_prompt = """你是考研数学辅导专家。根据知识点出2道练习题。
-要求：
-1. 题目覆盖给出的知识点
-2. 包含选择题
-3. 所有数学公式使用 LaTeX：$...$
-4. 每题用 --- 分隔，格式如下：
+要求：包含选择题，公式用 LaTeX $...$。每题用 --- 分隔，格式：
 
-Q: 题目文本
+Q: 题目
 A) 选项1
 B) 选项2
 C) 选项3
@@ -438,17 +434,11 @@ ANSWER: 正确选项字母
 EXPLAIN: 详细解析（含步骤）
 ---"""
 
-        user_prompt = f"""请为以下知识点生成复习题目：
+        user_prompt = f"""为以下知识点生成练习题：
 
 {kb_list}
 
-按格式输出："""
-
-## 题目2：[知识点2相关]
-...
-
-## 题目3：[知识点3相关]
-..."""
+输出："""
 
         request_data = {
             "model": MODEL_NAME,

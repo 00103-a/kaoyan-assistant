@@ -20,7 +20,7 @@ st.set_page_config(page_title="考研RAG智能助手", page_icon="📚", layout=
 # API配置
 API_KEY = os.environ.get("AI_API_KEY", "23de6f0b1df140369657e9173f80365d.G3YTxmmnzbE5jYQT")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.z.ai/api/coding/paas/v4")
-MODEL_NAME = os.environ.get("AI_MODEL", "glm-4.6")
+MODEL_NAME = os.environ.get("AI_MODEL", "glm-4.7")
 
 DATA_DIR = Path("data/corpus")
 DEMO_DATA_DIR = Path("data/corpus_demo")
@@ -375,8 +375,8 @@ def render_qa_cards(raw_text, columns=2):
         return
     blocks = raw_text.split("---")
     cols = st.columns(columns)
-    padding = "20px" if columns == 1 else "18px"
-    min_h = "260px" if columns == 1 else "250px"
+    padding = "20px" if columns == 1 else "24px"
+    min_h = "260px" if columns == 1 else "320px"
     qi = 0
     for block in blocks:
         block = block.strip()
@@ -404,9 +404,9 @@ def render_qa_cards(raw_text, columns=2):
                 elif not question:
                     question = line
         with cols[qi % columns]:
-            st.markdown(f"<div style='background:#fff;border-radius:12px;padding:{padding};box-shadow:0 1px 3px rgba(0,0,0,0.04);min-height:{min_h};'>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#fff;border-radius:12px;padding:{padding};box-shadow:0 1px 3px rgba(0,0,0,0.04);min-height:{min_h};font-size:15px;'>", unsafe_allow_html=True)
             st.caption(f"第{qi+1}题")
-            st.markdown(question if columns == 1 else question[:300])
+            st.markdown(question)
             if options:
                 for opt in options[:4]:
                     st.markdown(opt)
@@ -415,7 +415,7 @@ def render_qa_cards(raw_text, columns=2):
                     if answer:
                         st.markdown(f"**正确答案**: {answer}")
                     if explain:
-                        st.markdown(explain[:500])
+                        st.markdown(explain)
             st.markdown("</div>", unsafe_allow_html=True)
         qi += 1
         if qi >= 2:
@@ -574,9 +574,8 @@ def parse_multi_output(raw_text):
             return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
         return ""
     return {
-        "answer": extract("[ANSWER]", "[KNOWLEDGE]") or extract("[ANSWER]", "[QUIZ]") or raw_text[:1500],
-        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "[QUIZ]").split(",") if k.strip()],
-        "quiz": extract("[QUIZ]", "[END]")
+        "answer": extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500],
+        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "").split(",") if k.strip()],
     }
 
 def run_pipeline(query, results, model_name, img_data=None):
@@ -597,22 +596,12 @@ def run_pipeline(query, results, model_name, img_data=None):
 
 任务2：判断问题涉及的知识点，输出概念名称（如：导数, 定积分, 矩阵）。
 
-任务3：生成2道选择题，每题4个选项+正确答案+解析。
-
-输出格式（3个标签缺一不可）：
+输出格式：
 [ANSWER]
 （回答）
 
 [KNOWLEDGE]
 （概念名，逗号分隔）
-
-[QUIZ]
-Q: 题目（公式用$...$）
-A) 选项 B) 选项 C) 选项 D) 选项
-ANSWER: 字母
-EXPLAIN: 解析含步骤
----
-[END]
 
 {skill_prompt if skill_prompt else ""}
 
@@ -1117,8 +1106,8 @@ with left_col:
     st.markdown("---")
 
     # 模型
-    st.session_state.selected_model = "glm-4.6"
-    st.caption("模型: glm-4.6")
+    st.session_state.selected_model = "glm-4.7"
+    st.caption("模型: glm-4.7")
 
     st.markdown("---")
 
@@ -1211,25 +1200,37 @@ with mid_col:
         else:
             st.caption("📡 回答来自LLM自身知识")
 
-        # 练习题
-        if output.get("quiz"):
-            st.markdown("#### 📝 配套练习题")
-            render_qa_cards(output["quiz"])
+        # 保存上下文到 session_state（供后续按钮使用）
+        st.session_state._last_output = output
+        st.session_state._last_query = query
+        st.session_state._last_results = results
 
-            # 保存上下文到 session_state（供后续评价按钮使用）
-            st.session_state._last_output = output
-            st.session_state._last_query = query
-            st.session_state._last_results = results
-
-    # 评价按钮（在 mid_col 内，不在 if submitted 内）
+    # 出2道练习题按钮 + 评价按钮（在 mid_col 内，不在 if submitted 内）
     # 显示上一次操作的反馈消息
     act_msg = st.session_state.pop("_action_msg", "")
     act_diag = st.session_state.pop("_action_diag", "")
     if act_msg:
         st.success(f"{act_msg}  ·  {act_diag}" if act_diag else act_msg)
 
+    # 出题结果显示
+    btn_quiz = st.session_state.pop("_btn_quiz", None)
+    if btn_quiz and btn_quiz.get("success"):
+        st.markdown("#### 📝 练习题")
+        render_qa_cards(btn_quiz['questions'], columns=2)
+
     last_output = st.session_state.get("_last_output")
     if last_output:
+        # 出2道练习题按钮
+        if st.button("🎲 出2道练习题", use_container_width=True):
+            last_query = st.session_state.get("_last_query", "")
+            matched = smart_match_knowledge(last_query)
+            if matched:
+                with st.spinner("🎲 生成题目中..."):
+                    st.session_state._btn_quiz = generate_review_questions([{"knowledge_id": m} for m in matched[:2]])
+                st.rerun()
+            else:
+                st.info("未匹配到相关知识点")
+
         st.markdown("### 这个回答对你有帮助吗？")
         col1, col2 = st.columns(2)
         with col1:
@@ -1289,16 +1290,8 @@ with tab1:
 with tab2:
     st.subheader("🎯 复习挑战")
     candidates = get_review_candidates()
-    # 诊断：直读 DB 前 5 条
-    uid = st.session_state.get("user_id", 1)
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT knowledge_id, status FROM knowledge_mastery WHERE user_id=? LIMIT 5", (uid,))
-    db_raw = c.fetchall()
-    conn.close()
-    st.caption(f"📊 DB前5条: {[(r[0][:25], r[1]) for r in db_raw]}")
     if candidates:
-        for i, c in enumerate(candidates[:5], 1):
+        for i, c in enumerate(candidates, 1):
             recall_pct = int(c['recall'] * 100)
             with st.expander(f"第{i}题: {c['knowledge_id'][:35]} (记忆: {recall_pct}%)"):
                 knowledge_text = get_knowledge_text(c['knowledge_id'], corpus)
@@ -1317,8 +1310,12 @@ with tab2:
                     if st.button(f"🎲 出题", key=gen_key):
                         with st.spinner("🎲 生成题目中..."):
                             gen_r = generate_review_questions([{"knowledge_id": c['knowledge_id']}])
-                            if gen_r.get("success"):
-                                render_qa_cards(gen_r['questions'], columns=1)
+                            st.session_state._rev_quiz = gen_r
+                            st.rerun()
+
+        quiz = st.session_state.pop("_rev_quiz", None)
+        if quiz and quiz.get("success"):
+            render_qa_cards(quiz['questions'], columns=2)
 
         if not candidates:
             st.success("🎉 暂无待复习知识点。使用问答后自动添加。")

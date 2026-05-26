@@ -550,9 +550,11 @@ def parse_multi_output(raw_text):
         if begin in raw_text and end in raw_text:
             return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
         return ""
+    knowledge_part = raw_text.split("[KNOWLEDGE]", 1)[-1] if "[KNOWLEDGE]" in raw_text else ""
+    knowledge_raw = knowledge_part.split("[", 1)[0].strip() if "[" in knowledge_part else knowledge_part.strip()
     return {
         "answer": extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500],
-        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "参考资料").split(",") if k.strip()],
+        "knowledge": [k.strip() for k in knowledge_raw.split(",") if k.strip()],
     }
 
 def run_pipeline(query, results, model_name, img_data=None):

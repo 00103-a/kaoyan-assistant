@@ -418,7 +418,7 @@ def render_qa_cards(raw_text, columns=2):
                         st.markdown(explain)
             st.markdown("</div>", unsafe_allow_html=True)
         qi += 1
-        if qi >= 2:
+        if qi >= 1:
             break
     st.components.v1.html("<script>MathJax.typesetPromise()</script>", height=0)
 
@@ -429,7 +429,7 @@ def generate_review_questions(knowledge_points):
     try:
         kb_list = "\n".join([f"{i+1}. {kp['knowledge_id']}" for i, kp in enumerate(knowledge_points[:3])])
 
-        system_prompt = """你是考研数学辅导专家。根据知识点出2道练习题。
+        system_prompt = """你是考研数学辅导专家。根据知识点出1道练习题。
 要求：包含选择题，公式用 LaTeX $...$。每题用 --- 分隔，格式：
 
 Q: 题目
@@ -448,258 +448,13 @@ EXPLAIN: 详细解析（含步骤）
 输出："""
 
         request_data = {
-            "model": MODEL_NAME,
+            "model": "glm-4-flash",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            "max_tokens": 2000,
+            "max_tokens": 500,
             "temperature": 0.7
-        }
-
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {API_KEY}'
-            },
-            method='POST'
-        )
-
-        with urllib.request.urlopen(req, timeout=120) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return {
-                "success": True,
-                "questions": result['choices'][0]['message']['content'],
-                "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
-            }
-
-    except Exception as e:
-        print(f"生成题目失败: {e}")
-        return generate_local_questions(knowledge_points)
-
-def generate_local_questions(knowledge_points):
-    if not knowledge_points:
-        return {"error": "无复习知识点", "questions": ""}
-
-    questions = "## 🎯 今日复习挑战\n\n"
-
-    for i, kp in enumerate(knowledge_points[:3], 1):
-        kid = kp.get("knowledge_id", f"知识点{i}")
-        level = kp.get("mastery_level", 50)
-        status = kp.get("status", "学习中")
-
-        if level < 30:
-            difficulty = "基础题"
-            question = f"请回忆 {kid} 的定义和基本概念"
-        elif level < 60:
-            difficulty = "中等题"
-            question = f"请解释 {kid} 的原理，并举例说明"
-        else:
-            difficulty = "提高题"
-            question = f"运用 {kid} 解决以下问题：..."
-
-        questions += f"""### 题目 {i}（{difficulty}）
-📚 知识点：{kid}
-📊 掌握程度：{level}% | 状态：{status}
-
-❓ {question}
-
-<details>
-<summary>点击查看答案</summary>
-
-答案：{kid} 的核心要点如下...
-</details>
-
----
-"""
-
-    return {
-        "success": True,
-        "questions": questions,
-        "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
-    }
-
-# ==================== 多Agent管线 ====================
-
-def extract_json(text):
-    text = text.strip()
-    if "```json" in text:
-        text = text.split("```json",1)[1].split("```",1)[0].strip()
-    elif text.startswith("```"):
-        text = text.split("```",2)[1].strip()
-    return text
-
-ROUTER_PROMPT = """判断以下考研问题的学科类型，只输出JSON：
-- english: 英语作文、翻译、阅读、完形、词汇、语法
-- politics: 政治理论、马原、毛中特、近代史、思修、时政
-- math: 数学计算、求导、积分、证明、公式、矩阵、概率
-
-输出 {"type":"english"|"politics"|"math"}"""
-
-ENGLISH_PROMPT = """你是考研英语辅导专家。专精：作文模板、长难句分析、翻译技巧、阅读策略。
-回答简洁实用，给出可操作的建议。不编造具体分数线或统计数据。"""
-
-POLITICS_PROMPT = """你是考研政治辅导专家。专精：马原原理、毛中特体系、近代史脉络、思修要点、时政热点。
-回答结构清晰，先给出核心结论再展开。不编造具体分值或命题预测。"""
-
-def classify_query(query):
-    """Router: 判断问题属于 english/politics/math"""
-    data = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": ROUTER_PROMPT},
-            {"role": "user", "content": query}
-        ],
-        "max_tokens": 30, "temperature": 0
-    }
-    req = urllib.request.Request(API_BASE + "/chat/completions",
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-        method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            return json.loads(extract_json(raw)).get("type", "math")
-    except:
-        return "math"
-
-def parse_multi_output(raw_text):
-    """解析 LLM 一次输出的 [ANSWER]/[KNOWLEDGE]/[QUIZ]"""
-    if "[ANSWER]" not in raw_text:
-        return {"answer": raw_text[:2000], "knowledge": [], "quiz": ""}
-    def extract(begin, end):
-        if begin in raw_text and end in raw_text:
-            return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
-        return ""
-    return {
-        "answer": extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500],
-        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "参考资料").split(",") if k.strip()],
-    }
-
-def run_pipeline(query, results, model_name, img_data=None):
-    """统一管线: Router分类 → 一次调用出全部"""
-    pipeline_log = []
-    
-    # ① Router 分类（仅用于日志）
-    qtype = classify_query(query)
-    pipeline_log.append(f"🧭 Router → {qtype}")
-    
-    # ② 统一 Math 路径：一次调用出全部
-    skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
-    context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in results[:3]]) if results else ""
-
-    system_prompt = f"""你是考研数学辅导专家。请完成以下任务并用标签输出：
-
-任务1：根据参考资料回答用户问题。{"严格遵循 Skill 的格式要求。" if skill_prompt else "使用LaTeX公式（$...$），回答简洁准确。"}
-
-任务2：判断问题涉及的知识点，输出概念名称（如：导数, 定积分, 矩阵）。
-
-输出格式：
-[ANSWER]
-（回答）
-
-[KNOWLEDGE]
-（概念名，逗号分隔）
-
-{skill_prompt if skill_prompt else ""}
-
-参考资料：
-{context}"""
-
-    if img_data:
-        user_content = [
-            {"type": "text", "text": f"问题：{query}"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-        ]
-    else:
-        user_content = f"问题：{query}"
-    model = "glm-4v-flash" if img_data else model_name
-    data = {"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "max_tokens": 2500, "temperature": 0.3}
-    req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            raw = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            result = parse_multi_output(raw)
-            result["_raw_debug"] = raw[:500]  # 诊断：看 GLM 实际输出
-            result["qtype"] = qtype
-            result["pipeline_log"] = pipeline_log
-            return result
-    except Exception as e:
-        return {"answer": f"[系统提示] API调用失败: {str(e)[:100]}", "knowledge": [], "quiz": "", "qtype": qtype, "pipeline_log": pipeline_log}
-
-# ==================== LLM调用 ====================
-
-def call_llm(query, context_docs, model_name=None):
-    """调用LLM API - 支持RAG和纯LLM两种模式"""
-    if model_name is None:
-        model_name = MODEL_NAME
-
-    try:
-        experience = load_agent_experience()
-
-        # 模式判断：有检索结果用RAG，无检索结果用纯LLM
-        has_context = context_docs and len(context_docs) > 0
-
-        # 加载动态经验库
-        experience = load_agent_experience()
-
-        if has_context:
-            # RAG模式：结合知识库
-            context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in context_docs[:3]])
-
-            # 不可变约束 + 动态经验库
-            static_rules = """## 铁律：不可变约束 (绝对不可修改)
-1. **信息溯源**：回答必须严格基于提供的参考资料。资料中信息不足时，请如实说明。
-2. **禁止编造数据**：不编造具体数字、百分比、机构名、人名，除非资料中明确出现。
-3. **禁止无关延伸**：不补充资料未提及的内容。
-
-## 动态经验与偏好库 (自学习记录)
-"""
-            system_prompt = static_rules + (experience if experience else "暂无追加规则")
-            system_prompt += "\n\n请直接回答，不要多余的开场或结尾闲聊。"
-
-            user_prompt = f"""【用户问题】
-{query}
-
-【参考资料】
-{context}
-
-请根据以上参考资料回答："""
-        else:
-            # 纯LLM模式
-            static_rules = """## 铁律：不可变约束
-1. 如果无法确定答案，请诚实说明。
-2. 不编造具体数字、研究来源、统计报告。
-3. 回答简洁、有据可查。
-
-## 动态经验与偏好库
-"""
-            system_prompt = static_rules + (experience if experience else "暂无追加规则")
-            system_prompt += "\n\n请直接回答，不要多余闲聊。"
-
-            user_prompt = f"""【用户问题】
-{query}
-
-请回答："""
-
-        # 注入激活的 Skill
-        skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
-        if skill_prompt:
-            system_prompt = skill_prompt + "\n\n---\n\n" + system_prompt
-
-        # 不同的max_tokens
-        max_tokens = 800 if has_context else 1200
-
-        request_data = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "max_tokens": max_tokens,
-            "temperature": 0.3
         }
 
         req = urllib.request.Request(
@@ -714,139 +469,12 @@ def call_llm(query, context_docs, model_name=None):
 
         with urllib.request.urlopen(req, timeout=30) as response:
             result = json.loads(response.read().decode('utf-8'))
-            return result['choices'][0]['message']['content']
+            return {
+                "success": True,
+                "questions": result['choices'][0]['message']['content'],
+                "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
+            }
 
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else ""
-        st.error(f"API错误 {e.code}: {error_body}")
-        return fallback_answer(query, context_docs)
-    except Exception as e:
-        st.error(f"API调用失败: {e}")
-        return fallback_answer(query, context_docs)
-
-def fallback_answer(query, docs):
-    if not docs:
-        return "未找到相关资料"
-    best = docs[0]
-    text = best["text"]
-    return f"""📚 根据检索到的资料回答【{query}】：
-
-{text[:600]}...
-
----
-📖 参考来源：{best['id']} (相关性: {best['score']})"""
-
-# ==================== 幻觉检测 ====================
-
-MATH_EVAL_PROMPT = """你是考研数学事实核查员。评估回答是否在上下文中存在有害幻觉。
-
-## 三类声明
-1. **严格支持**: 回答直接来源于Context
-2. **专业常识拓展**: Context未提及，但属于大学数学公认定理/定义（如子数列收敛性、零点定理、极限四则运算）- 宽容通过
-3. **有害幻觉**: 捏造考情/分值/频率/历史/应用领域
-
-## 输出JSON
-{"is_hallucinating": true/false, "hallucinated_claims": [...], "common_sense_claims": [...]}"""
-
-def evaluate_hallucination(user_query: str, context: str, agent_response: str, model_name=None):
-    """调用LLM评估回答是否存在有害幻觉"""
-    if model_name is None:
-        model_name = MODEL_NAME
-    try:
-        prompt = f"""[User Query]: {user_query}
-
-[Context]:
-{context}
-
-[Agent Response]:
-{agent_response}"""
-
-        data = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": MATH_EVAL_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 600,
-            "temperature": 0.1
-        }
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            content = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            return json.loads(content)
-    except Exception as e:
-        return {"is_hallucinating": False, "error": str(e), "hallucinated_claims": [], "common_sense_claims": []}
-
-# ==================== Agent自我反思 ====================
-
-def trigger_self_learning(rule_text: str) -> str:
-    """将新规则追加到动态经验库，并返回确认信息"""
-    existing = load_agent_experience()
-    # 找到最后一条编号
-    lines = existing.split("\n")
-    last_num = 1
-    for line in lines:
-        if line.strip().startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
-            try:
-                num = int(line.split(".")[0])
-                last_num = max(last_num, num)
-            except:
-                pass
-
-    next_num = last_num + 1
-    today = datetime.now().strftime("%Y-%m-%d")
-    new_entry = f"{next_num}. [{today}] {rule_text}"
-
-    # 追加到"结束记录"之前
-    if "--- 结束记录 ---" in existing:
-        updated = existing.replace("--- 结束记录 ---", f"{new_entry}\n--- 结束记录 ---")
-    else:
-        updated = f"{existing}\n{new_entry}\n--- 结束记录 ---"
-
-    save_agent_experience(updated)
-    return f"\n🔄 **自学习已触发** — **已将以下规则追加至经验库**：{rule_text}\n**当前状态**：底层逻辑未受影响，增量规则已生效。"
-
-def agent_reflect(question, answer, feedback):
-    try:
-        prompt = f"""你是一个Agent，正在进行自我反思。用户对你的回答提供了反馈：
-
-问题: {question}
-你的回答: {answer}
-用户反馈: {feedback}
-
-请从反馈中提炼出1条可以在后续任务中复用的具体规则（一句话即可，不要编号）。
-
-直接输出规则文字，不要多余内容。"""
-
-        request_data = {
-            "model": MODEL_NAME,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
-            "temperature": 0.3
-        }
-
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {API_KEY}'
-            },
-            method='POST'
-        )
-
-        with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            rule = result['choices'][0]['message']['content'].strip()
-
-            # 追加到动态经验库
-            confirm = trigger_self_learning(rule)
-            return {"success": True, "reflection": rule, "confirm": confirm}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

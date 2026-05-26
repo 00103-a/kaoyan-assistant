@@ -624,10 +624,13 @@ Q: 题目2
 参考资料：
 {context}"""
 
-    user_content = [{"type": "text", "text": f"问题：{query}"}] if not img_data else [
-        {"type": "text", "text": f"问题：{query}"},
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-    ]
+    if img_data:
+        user_content = [
+            {"type": "text", "text": f"问题：{query}"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
+        ]
+    else:
+        user_content = f"问题：{query}"
     data = {"model": model_name, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "max_tokens": 2500, "temperature": 0.3}
     req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
     try:

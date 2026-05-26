@@ -575,7 +575,7 @@ def parse_multi_output(raw_text):
         return ""
     return {
         "answer": extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500],
-        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "").split(",") if k.strip()],
+        "knowledge": [k.strip() for k in extract("[KNOWLEDGE]", "参考资料").split(",") if k.strip()],
     }
 
 def run_pipeline(query, results, model_name, img_data=None):
@@ -615,7 +615,8 @@ def run_pipeline(query, results, model_name, img_data=None):
         ]
     else:
         user_content = f"问题：{query}"
-    data = {"model": model_name, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "max_tokens": 2500, "temperature": 0.3}
+    model = "glm-4v-flash" if img_data else model_name
+    data = {"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "max_tokens": 2500, "temperature": 0.3}
     req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -1151,8 +1152,11 @@ with mid_col:
         submitted = st.form_submit_button("提问", use_container_width=True)
 
     img_data = None
-    if uploaded_img:
-        img_data = base64.b64encode(uploaded_img.getvalue()).decode()
+    if uploaded_img is not None:
+        try:
+            img_data = base64.b64encode(uploaded_img.getvalue()).decode()
+        except:
+            pass
 
     if submitted and (query or img_data):
         add_thinking(f"查询: {query[:30]}..." if query else "图片识别...")

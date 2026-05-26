@@ -18,9 +18,9 @@ import urllib.error
 st.set_page_config(page_title="考研RAG智能助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = os.environ.get("AI_API_KEY", "sk-Sav7yLJqAZ6FxCiXy2kCOOSelXOiDceY1YzhtCNsJArcu1dx")
-API_BASE = os.environ.get("AI_API_BASE", "https://aiberm.com/v1")
-MODEL_NAME = os.environ.get("AI_MODEL", "gpt-4o-mini")
+API_KEY = os.environ.get("AI_API_KEY", "23de6f0b1df140369657e9173f80365d.G3YTxmmnzbE5jYQT")
+API_BASE = os.environ.get("AI_API_BASE", "https://api.z.ai/api/coding/paas/v4")
+MODEL_NAME = os.environ.get("AI_MODEL", "glm-4-flash")
 
 DATA_DIR = Path("data/corpus")
 DEMO_DATA_DIR = Path("data/corpus_demo")
@@ -1134,8 +1134,8 @@ with left_col:
     st.markdown("---")
 
     # 模型
-    st.session_state.selected_model = "gpt-4o-mini"
-    st.caption("模型: gpt-4o-mini")
+    st.session_state.selected_model = "glm-4-flash"
+    st.caption("模型: glm-4-flash")
 
     st.markdown("---")
 

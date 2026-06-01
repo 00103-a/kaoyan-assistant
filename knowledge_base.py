@@ -10,13 +10,14 @@ import base64
 import urllib.request
 import urllib.error
 import re
+import os
 from pathlib import Path
 
-# ==================== 配置 ====================
-MEMORY_DB = "data/memory.db"
-API_KEY = "23de6f0b1df140369657e9173f80365d.G3YTxmmnzbE5jYQT"
-API_BASE = "https://api.z.ai/api/coding/paas/v4"
-UMI_OCR_URL = "http://localhost:1224"
+# ==================== 配置（从环境变量读取） ====================
+MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
+API_KEY = os.environ.get("AI_API_KEY", "")
+API_BASE = os.environ.get("AI_API_BASE", "https://api.z.ai/api/coding/paas/v4")
+UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 
 # ==================== 数据库初始化 ====================
@@ -73,6 +74,15 @@ def init_knowledge_db(conn):
         mastered INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
+
+
+def ensure_db():
+    """自动创建数据库和表（独立运行时调用）"""
+    os.makedirs(os.path.dirname(MEMORY_DB) or "data", exist_ok=True)
+    conn = sqlite3.connect(MEMORY_DB)
+    init_knowledge_db(conn)
+    conn.commit()
+    conn.close()
 
 
 # ==================== LLM 辅助 ====================
@@ -383,7 +393,12 @@ def get_review_items(user_id, subject):
 
 def render_knowledge_page():
     """渲染专业知识库页面（4 个 Tab）"""
-    user_id = st.session_state.get("user_id")
+    user_id = st.session_state.get("user_id", 1)
+
+    if not API_KEY:
+        st.error("⚠️ 未设置 API Key。请设置环境变量 `AI_API_KEY` 后重启。")
+        st.code("export AI_API_KEY='sk-xxx'  # Linux/Mac\nset AI_API_KEY=sk-xxx  # Windows", language="bash")
+        st.stop()
 
     st.markdown("""
     <div class="main-title">

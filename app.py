@@ -96,7 +96,11 @@ st.components.v1.html("""
 
 # ==================== Cookie 持久化登录 ====================
 
-cookie_manager = stx.CookieManager()
+@st.fragment
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 def generate_login_token():
     """生成 64 字符随机 token"""

@@ -96,7 +96,7 @@ st.components.v1.html("""
 
 # ==================== Cookie 持久化登录 ====================
 
-@st.fragment
+@st.cache_resource
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -1665,8 +1665,16 @@ def create_review_challenge(kid):
 # ==================== 复习题目生成 ====================
 
 def _fix_latex(text):
-    r"""Convert \(\) to $, \[\] to $$"""
+    r"""Convert \(\) to $, \[\] to $$, wrap bare LaTeX commands in $"""
     text = text.replace("\\( ", "$ ").replace(" \\)", " $").replace("\\(", "$").replace("\\)", "$").replace("\\[", "$$").replace("\\]", "$$")
+    # Wrap bare single-backslash LaTeX commands in $...$
+    # e.g. \lim_{h \to 0} \frac{a}{b} → $\lim_{h \to 0} \frac{a}{b}$
+    def _wrap_bare_latex(m):
+        s = m.group(0)
+        if "$" in s:
+            return s
+        return f"${s}$"
+    text = re.sub(r'(?<!\$)(\\(?:lim|frac|sqrt|int|sum|prod|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|pi|rho|tau|phi|psi|chi|infty|partial|nabla|forall|exists|in|notin|subset|supset|cup|cap|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|sim|propto|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|leftrightarrow|vec|hat|bar|dot|ddot|overline|underline|overbrace|underbrace|left\(|right\)|Big|big|left\[|right\])\b[^\n$]*', _wrap_bare_latex, text)
     return text
 
 def _collapse_math(text):
@@ -1832,18 +1840,18 @@ def generate_review_questions(knowledge_points):
 
         system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
-⚠️ 所有数学公式必须用 \\(...\\) 包裹，否则无法显示！
+⚠️ 所有数学公式必须用 \\(\\) 包裹，例如 \\(f(x)\\)、\\(\\frac{a}{b}\\)、\\(\\lim_{x \\to 0}\\)。不要用 \\[\\] 或 $$。
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。
 
 严格按以下格式输出（不要输出格式说明之外的任何内容）：
-Q: 题目（用文字描述，不要用LaTeX公式）
+Q: 题目（用文字描述）
 A) 选项A
 B) 选项B
 C) 选项C
 D) 选项D
 ANSWER: 正确选项字母
-EXPLAIN: 解析过程（用文字描述，不要用LaTeX公式）
+EXPLAIN: 解析过程
 ---"""
 
         user_prompt = f"为以下知识点出1道选择题：\n\n{kb_list}\n\n{context_text}"

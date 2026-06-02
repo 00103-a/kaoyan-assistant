@@ -1784,7 +1784,7 @@ EXPLAIN: 解析过程（用文字描述，不要用LaTeX公式）
             result = json.loads(response.read().decode('utf-8'))
             return {
                 "success": True,
-                "questions": result['choices'][0]['message']['content'],
+                "questions": _extract_content(result['choices'][0]['message']),
                 "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
             }
 

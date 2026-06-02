@@ -22,7 +22,9 @@ import extra_streamlit_components as stx
 
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
+import streamlit.components.v1.custom_component as _cc
 _policies.check_cache_replay_rules = lambda: None
+_cc.check_cache_replay_rules = lambda: None
 
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")

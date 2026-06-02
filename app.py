@@ -1617,10 +1617,11 @@ def _escape_md(text):
 def _katex_refresh():
     st.components.v1.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\\\(',right:'\\\\)',display:false}],throwOnError:!1,strict:!1})}</script>", height=0)
 
-def render_qa_cards(raw_text, columns=2):
-    """渲染练习题：全宽卡片，选项直接显示，答案/解析折叠"""
+def render_qa_cards(raw_text, columns=2, typing=False):
+    """渲染练习题：全宽卡片，选项直接显示，答案/解析折叠。typing=True 时逐字打字效果"""
     if not raw_text:
         return
+    import time as _time
     blocks = raw_text.split("---")
     qi = 0
     for block in blocks:
@@ -1678,12 +1679,33 @@ def render_qa_cards(raw_text, columns=2):
         # 题干中裸数学记号自动包 $（仅当无任何已有分隔符 \$ \[ \( 时触发）
         if re.search(r'\\[a-zA-Z]', question) and not re.search(r'[\$\\[]', question):
             question = re.sub(r'(\\[a-zA-Z]+(?:\{[^}]*\})*(?:_\{[^}]*\})*(?:\^\{[^}]*\})*|\w+\^\{?\d+\}?|\\,?[a-z]+|\w+\'\(\d+\))', r'$\1$', question)
+
         st.markdown(f"<div style='background:#fff;border-radius:16px;padding:clamp(14px,3vw,40px);box-shadow:0 1px 3px rgba(0,0,0,0.04);margin-bottom:24px;font-size:16px;overflow-x:auto;'>", unsafe_allow_html=True)
         st.caption(f"第{qi+1}题")
-        st.markdown(_escape_md(_collapse_math(_fix_latex(question))))
-        if options:
-            for opt in options[:4]:
-                st.markdown(_escape_md(_collapse_math(opt)))
+
+        if typing:
+            # 逐字打字效果：题干
+            placeholder = st.empty()
+            displayed = ""
+            for char in _escape_md(_collapse_math(_fix_latex(question))):
+                displayed += char
+                placeholder.markdown(displayed)
+                _time.sleep(0.03)
+            # 逐字打字效果：选项
+            if options:
+                for opt in options[:4]:
+                    placeholder = st.empty()
+                    displayed = ""
+                    for char in _escape_md(_collapse_math(opt)):
+                        displayed += char
+                        placeholder.markdown(displayed)
+                        _time.sleep(0.02)
+        else:
+            st.markdown(_escape_md(_collapse_math(_fix_latex(question))))
+            if options:
+                for opt in options[:4]:
+                    st.markdown(_escape_md(_collapse_math(opt)))
+
         if answer or explain:
             with st.expander("📖 答案与解析", expanded=False):
                 if answer:
@@ -3641,7 +3663,7 @@ with mid_col:
     btn_quiz = st.session_state.pop("_btn_quiz", None)
     if btn_quiz and btn_quiz.get("success"):
         st.markdown("#### 📝 练习题")
-        render_qa_cards(btn_quiz['questions'], columns=2)
+        render_qa_cards(btn_quiz['questions'], columns=2, typing=True)
 
     last_output = st.session_state.get("_last_output")
     if last_output:
@@ -3733,7 +3755,7 @@ with tab1:
                     quiz = st.session_state.pop("_kb_quiz", None)
                     st.session_state.pop("_kb_qid", None)
                     if quiz and quiz.get("success"):
-                        render_qa_cards(quiz['questions'], columns=1)
+                        render_qa_cards(quiz['questions'], columns=1, typing=True)
     else:
         for doc in filtered_corpus:
             kid = doc['id']
@@ -3749,7 +3771,7 @@ with tab1:
                     quiz = st.session_state.pop("_kb_quiz", None)
                     st.session_state.pop("_kb_qid", None)
                     if quiz and quiz.get("success"):
-                        render_qa_cards(quiz['questions'], columns=1)
+                        render_qa_cards(quiz['questions'], columns=1, typing=True)
 
 with tab2:
     st.subheader("🎯 复习挑战")
@@ -3783,7 +3805,7 @@ with tab2:
                 quiz = st.session_state.pop("_rev_quiz", None)
                 st.session_state.pop("_rev_quiz_id", None)
                 if quiz and quiz.get("success"):
-                    render_qa_cards(quiz['questions'], columns=1)
+                    render_qa_cards(quiz['questions'], columns=1, typing=True)
 
         if not candidates:
             st.success("🎉 暂无待复习知识点。使用问答后自动添加。")

@@ -105,19 +105,17 @@ def set_auth_cookie(token, days=30):
 
 def get_auth_cookie():
     """读取 auth_token cookie（JS → query_params）"""
-    # 先检查 query_params 中是否已有 token（JS 回写的结果）
     params = st.query_params
     if "auth_token" in params and params["auth_token"]:
         return params["auth_token"]
-    # 注入 JS 读取 cookie 并通过 query_params 传回
     st.components.v1.html("""
     <script>
     const m = document.cookie.split('; ').find(r => r.startsWith('auth_token='));
     const v = m ? m.split('=')[1] : '';
     if (v) {
-        const url = new URL(window.location);
+        const url = new URL(window.parent.location);
         url.searchParams.set('auth_token', v);
-        window.location.href = url.toString();
+        window.parent.location.href = url.toString();
     }
     </script>
     """, height=0)

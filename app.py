@@ -16,7 +16,9 @@ from datetime import datetime, date, timedelta
 import urllib.request
 import urllib.error
 import re
+import secrets
 import kaoyan_predict
+import extra_streamlit_components as stx
 
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
@@ -91,6 +93,46 @@ st.components.v1.html("""
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 """, height=0)
+
+# ==================== Cookie 持久化登录 ====================
+
+@st.fragment
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
+
+def generate_login_token():
+    """生成 64 字符随机 token"""
+    return secrets.token_hex(32)
+
+def save_login_token(user_id, token):
+    """将 token 存入数据库"""
+    conn = sqlite3.connect(MEMORY_DB)
+    c = conn.cursor()
+    c.execute("UPDATE users SET login_token=? WHERE id=?", (token, user_id))
+    conn.commit()
+    conn.close()
+
+def verify_login_token(token):
+    """验证 token，返回 user_id 或 None"""
+    if not token:
+        return None
+    conn = sqlite3.connect(MEMORY_DB)
+    c = conn.cursor()
+    c.execute("SELECT id, username FROM users WHERE login_token=?", (token,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"user_id": row[0], "username": row[1]}
+    return None
+
+def clear_login_token(user_id):
+    """清除数据库中的 token"""
+    conn = sqlite3.connect(MEMORY_DB)
+    conn.execute("UPDATE users SET login_token=NULL WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
 
 # ==================== 核心功能 ====================
 
@@ -271,6 +313,8 @@ def init_memory_db():
     except: c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
     try: c.execute("SELECT display_name FROM users LIMIT 1")
     except: c.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+    try: c.execute("SELECT login_token FROM users LIMIT 1")
+    except: c.execute("ALTER TABLE users ADD COLUMN login_token TEXT")
 
     c.execute("""CREATE TABLE IF NOT EXISTS knowledge_mastery (
         id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
@@ -2424,6 +2468,17 @@ if "page" not in st.session_state:
 # 确保数据库表存在（登录前就必须建好）
 init_memory_db()
 
+# Cookie 自动登录
+if not st.session_state.logged_in:
+    token = cookie_manager.get("auth_token")
+    if token:
+        user_info = verify_login_token(token)
+        if user_info:
+            st.session_state.logged_in = True
+            st.session_state.user_id = user_info["user_id"]
+            st.session_state.username = user_info["username"]
+            st.rerun()
+
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
     if not API_KEY:
@@ -2447,6 +2502,9 @@ if not st.session_state.logged_in:
             if submitted and username and password:
                 uid = login_user(username, password)
                 if uid:
+                    token = generate_login_token()
+                    save_login_token(uid, token)
+                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
                     st.session_state.logged_in = True
                     st.session_state.user_id = uid
                     st.session_state.username = username
@@ -2469,6 +2527,9 @@ if not st.session_state.logged_in:
                 else:
                     uid = register_user(new_user, new_pass)
                     if uid:
+                        token = generate_login_token()
+                        save_login_token(uid, token)
+                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
                         st.session_state.logged_in = True
                         st.session_state.user_id = uid
                         st.session_state.username = new_user
@@ -2539,6 +2600,8 @@ if st.session_state.page == "hub":
     #         st.rerun()
 
     if st.button("🚪 退出登录", use_container_width=True):
+        clear_login_token(st.session_state.get("user_id", 0))
+        cookie_manager.delete("auth_token")
         st.session_state.logged_in = False
         st.session_state.user_id = None
         st.session_state.page = "hub"
@@ -3545,6 +3608,8 @@ with left_col:
     st.markdown("### 👤 当前用户")
     st.markdown(f"**{st.session_state.get('username','?')}**")
     if st.button("🚪 退出登录", use_container_width=True):
+        clear_login_token(st.session_state.get("user_id", 0))
+        cookie_manager.delete("auth_token")
         st.session_state.logged_in = False
         st.session_state.user_id = None
         st.session_state.page = "hub"

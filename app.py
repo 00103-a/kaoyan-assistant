@@ -47,58 +47,32 @@ EXPERIENCE_FILE = "agent_experience.md"
 # ==================== CSS样式 ====================
 st.markdown("""
 <style>
-    .stApp { background: #F8FAFC; }
+    .main-title { background: linear-gradient(135deg, #d77757 0%, #e8926a 100%); padding: 1.5rem; border-radius: 1rem; color: white; text-align: center; margin-bottom: 1rem; }
+    .main-title h1 { font-size: 2rem; font-weight: 700; margin: 0; }
+    .main-title p { opacity: 0.9; margin-top: 0.5rem; }
 
-    /* ===== Header ===== */
-    .app-header { text-align: center; padding: 2.5rem 1rem 1rem 1rem; margin-bottom: 0.5rem; }
-    .app-header h1 { font-size: 2.2rem; font-weight: 800; margin: 0;
-        background: linear-gradient(135deg, #4F7CFF 0%, #7C9EFF 100%);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-    .app-header p { font-size: 0.95rem; color: #94A3B8; margin-top: 0.4rem; letter-spacing: 0.5px; }
+    .memory-card { padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #d77757; cursor: pointer; transition: all 0.3s; }
+    .memory-card:hover { transform: translateX(5px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); background: #fff; }
 
-    /* ===== Greeting ===== */
-    .greeting { font-size: 0.85rem; color: #94A3B8; margin-bottom: 0.3rem; text-align: center; }
+    .learning-card { padding: 8px; margin: 3px 0; background: #fff8f0; border-radius: 6px; border-left: 3px solid #e8926a; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+    .mastered-card { padding: 8px; margin: 3px 0; background: #f0faf4; border-radius: 6px; border-left: 3px solid #7cb896; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
-    /* ===== Hub Cards ===== */
-    .card-title { font-size: 1.05rem; font-weight: 700; color: #1E293B; margin-bottom: 0.2rem; }
-    .card-desc { font-size: 0.82rem; color: #64748B; line-height: 1.5; margin-bottom: 0.6rem; }
-    div[data-testid="stVerticalBlockBorderWrapper"] { transition: all 0.25s ease !important; border-radius: 12px !important; }
-    div[data-testid="stVerticalBlockBorderWrapper"]:hover { transform: translateY(-3px) !important;
-        box-shadow: 0 8px 25px rgba(79,124,255,0.10) !important; }
+    .qa-card { background: #fff; border-radius: 14px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(215,119,87,0.06); margin-bottom: 16px; }
+    .ref-tag { display: inline-block; background: #fef5f0; color: #8b5a3c; padding: 3px 10px; border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #f0ddd0; }
 
-    /* ===== Memory Cards ===== */
-    .memory-card { padding: 12px; margin: 8px 0; background: #F8FAFC; border-radius: 10px;
-        border-left: 4px solid #4F7CFF; cursor: pointer; transition: all 0.3s; }
-    .memory-card:hover { transform: translateX(5px); box-shadow: 0 4px 12px rgba(79,124,255,0.12); background: #fff; }
-
-    /* ===== Knowledge Cards ===== */
-    .learning-card { padding: 8px; margin: 3px 0; background: #EEF2FF; border-radius: 6px;
-        border-left: 3px solid #7C9EFF; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-    .mastered-card { padding: 8px; margin: 3px 0; background: #ECFDF5; border-radius: 6px;
-        border-left: 3px solid #34D399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-
-    /* ===== QA Card ===== */
-    .qa-card { background: #fff; border-radius: 14px; padding: 24px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 4px 12px rgba(79,124,255,0.05); margin-bottom: 16px; }
-
-    /* ===== Reference Tags ===== */
-    .ref-tag { display: inline-block; background: #EEF2FF; color: #4F7CFF; padding: 3px 10px;
-        border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #D0DEFF; }
-
-    /* ===== Calendar ===== */
     .cal-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; text-align: center; }
     .cal-grid .cal-cell { padding: 4px 0; }
     .cal-grid .cal-cell small { font-size: 11px; }
 
     @media (max-width: 1024px) {
-        .app-header h1 { font-size: 1.6rem !important; }
+        .main-title h1 { font-size: 1.6rem !important; }
         .qa-card { padding: 18px !important; }
     }
 
     @media (max-width: 768px) {
-        .app-header { padding: 1.5rem 0.5rem 0.5rem 0.5rem !important; }
-        .app-header h1 { font-size: 1.3rem !important; }
-        .app-header p { font-size: 0.85rem !important; }
+        .main-title { padding: 1rem !important; }
+        .main-title h1 { font-size: 1.3rem !important; }
+        .main-title p { font-size: 0.85rem !important; }
         .qa-card { padding: 14px !important; font-size: 14px !important; }
         .learning-card, .mastered-card { white-space: normal !important; font-size: 11px !important; }
         .memory-card { padding: 8px !important; font-size: 13px !important; }
@@ -110,8 +84,8 @@ st.markdown("""
     }
 
     @media (max-width: 480px) {
-        .app-header { padding: 1rem 0.3rem 0.3rem 0.3rem !important; }
-        .app-header h1 { font-size: 1.1rem !important; }
+        .main-title { padding: 0.8rem !important; }
+        .main-title h1 { font-size: 1.1rem !important; }
         .qa-card { padding: 10px !important; }
         .cal-grid { grid-template-columns: repeat(5, 1fr) !important; }
         div[data-testid="stMetricValue"] { font-size: 0.95rem !important; }
@@ -2529,7 +2503,7 @@ if not st.session_state.logged_in:
         st.code("export AI_API_KEY='sk-xxx'  # Linux/Mac\nset AI_API_KEY=sk-xxx  # Windows", language="bash")
         st.stop()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📚 考研学习助手</h1>
         <p>多用户知识问答系统</p>
     </div>
@@ -2586,25 +2560,27 @@ if not st.session_state.logged_in:
 # ==================== Hub 主界面 ====================
 if st.session_state.page == "hub":
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📚 考研学习助手</h1>
         <p>请选择功能模块</p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f'<div class="greeting">👋 {st.session_state.get("username", "?")}，欢迎回来</div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:1px; background:linear-gradient(90deg, transparent, #E2E8F0, transparent); margin:0 25% 1.5rem 25%;"></div>', unsafe_allow_html=True)
+    st.markdown(f"##### 👋 {st.session_state.get('username', '?')}，欢迎回来")
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
     with col1:
         with st.container(border=True):
-            st.markdown('<div class="card-title">📐 考研数学问答工具</div><div class="card-desc">110个知识点 · 智能问答 · 遗忘曲线复习</div>', unsafe_allow_html=True)
+            st.markdown("### 📐 考研数学问答工具")
+            st.caption("110个知识点 · 智能问答 · 遗忘曲线复习")
             if st.button("进入问答工具", key="hub_qa", use_container_width=True):
                 st.session_state.page = "main"
                 st.rerun()
     with col2:
         with st.container(border=True):
-            st.markdown('<div class="card-title">🔥 高校热度查询</div><div class="card-desc">查院校 · 看数据 · 备考参考</div>', unsafe_allow_html=True)
+            st.markdown("### 🔥 高校热度查询")
+            st.caption("查院校 · 看数据 · 备考参考")
             if st.button("进入热度查询", key="hub_pop", use_container_width=True):
                 st.session_state.page = "popularity"
                 st.rerun()
@@ -2612,19 +2588,22 @@ if st.session_state.page == "hub":
     col3, col4 = st.columns(2)
     with col3:
         with st.container(border=True):
-            st.markdown('<div class="card-title">📖 英语专家</div><div class="card-desc">作文批改 · 长难句解析 · 翻译 · 单词记忆</div>', unsafe_allow_html=True)
+            st.markdown("### 📖 英语专家")
+            st.caption("作文批改 · 长难句解析 · 翻译 · 单词记忆")
             if st.button("进入英语专家", key="hub_english", use_container_width=True):
                 st.session_state.page = "english"
                 st.rerun()
     with col4:
         with st.container(border=True):
-            st.markdown('<div class="card-title">💬 提建议</div><div class="card-desc">反馈问题 · 提出需求</div>', unsafe_allow_html=True)
+            st.markdown("### 💬 提建议")
+            st.caption("反馈问题 · 提出需求")
             if st.button("提交建议", key="hub_suggest", use_container_width=True):
                 st.session_state.page = "suggest"
                 st.rerun()
 
     with st.container(border=True):
-        st.markdown('<div class="card-title">📅 打卡督学</div><div class="card-desc">每日打卡 · 学习计划 · 学习日记 · 番茄计时</div>', unsafe_allow_html=True)
+        st.markdown("### 📅 打卡督学")
+        st.caption("每日打卡 · 学习计划 · 学习日记 · 番茄计时")
         if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
             st.session_state.page = "checkin"
             st.rerun()
@@ -2649,7 +2628,7 @@ if st.session_state.page == "hub":
 # ==================== 高校热度查询 ====================
 if st.session_state.page == "popularity":
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>🔥 高校热度查询</h1>
         <p>院校信息与报考热度分析</p>
     </div>
@@ -2779,7 +2758,7 @@ if st.session_state.page == "suggest":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>💬 提建议</h1>
         <p>有什么想法？尽管说——</p>
     </div>
@@ -2806,7 +2785,7 @@ if st.session_state.page == "english":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📖 考研英语专家</h1>
         <p>作文批改 · 长难句解析 · 翻译练习 · 单词记忆</p>
     </div>
@@ -3193,7 +3172,7 @@ if st.session_state.page == "checkin":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📅 打卡与督学</h1>
         <p>每日打卡 · 学习计划 · 学习日记 · 番茄计时</p>
     </div>
@@ -3632,7 +3611,7 @@ if st.button("← 返回首页", key="back_hub"):
 
 # 顶部标题
 st.markdown("""
-<div class="app-header">
+<div class="main-title">
     <h1>📚 考研学习助手</h1>
     <p>基于本地知识库的智能问答系统 | 支持自学习、遗忘曲线、经验积累</p>
 </div>

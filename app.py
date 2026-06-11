@@ -52,7 +52,7 @@ st.markdown("""
     .stApp { background: #F5F4ED; }
 
     /* ===== Claude-Header (Serif, Parchment) ===== */
-    .app-header { text-align: center; padding: 3.5rem 1rem 2rem 1rem; margin-bottom: 0.5rem; }
+    .app-header { text-align: center; padding: 2.5rem 1rem 1rem 1rem; margin-bottom: 0.5rem; }
     .app-header h1 { font-size: 2.2rem; font-weight: 500; margin: 0; line-height: 1.2;
         color: #141413; font-family: Georgia, serif; }
     .app-header p { font-size: 1.06rem; color: #5E5D59; margin-top: 0.4rem; font-family: Arial, sans-serif; }
@@ -60,16 +60,13 @@ st.markdown("""
     /* ===== Greeting ===== */
     .greeting { font-size: 0.85rem; color: #87867F; margin-bottom: 0.3rem; text-align: center; }
 
-    /* ===== Breathing Room ===== */
-    div[data-testid="stHorizontalBlock"] { gap: 1.25rem !important; }
-
     /* ===== Hub Cards ===== */
     .card-title { font-size: 1.3rem; font-weight: 500; color: #141413; margin-bottom: 0.2rem; font-family: Georgia, serif; }
     .card-desc { font-size: 0.82rem; color: #5E5D59; line-height: 1.6; margin-bottom: 0.6rem; }
     div[data-testid="stVerticalBlockBorderWrapper"] { transition: all 0.25s ease !important;
         border-radius: 12px !important; box-shadow: 0px 0px 0px 1px #F0EEE6 !important; }
     div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0px 0px 0px 1px #D97757 !important; }
+        box-shadow: 0px 0px 0px 1px #D1CFC5 !important; }
 
     /* ===== Memory Cards ===== */
     .memory-card { padding: 12px; margin: 8px 0; background: #FAF9F5; border-radius: 8px;
@@ -78,18 +75,19 @@ st.markdown("""
         box-shadow: 0px 0px 0px 1px #D1CFC5; background: #FFFFFF; }
 
     /* ===== Knowledge Cards ===== */
-    .learning-card { padding: 8px; margin: 3px 0; background: #FFF8F5; border-radius: 6px;
+    .learning-card { padding: 8px; margin: 3px 0; background: #FAF9F5; border-radius: 6px;
         border-left: 3px solid #D97757; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
     .mastered-card { padding: 8px; margin: 3px 0; background: #ECFDF5; border-radius: 6px;
         border-left: 3px solid #34D399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
-    /* ===== QA Card (Ring Shadow, Warm Top Border) ===== */
-    .qa-card { background: #FAF9F5; border-radius: 12px; padding: 28px;
-        box-shadow: 0px 0px 0px 1px #F0EEE6; border-top: 2px solid #E8E6DC; margin-bottom: 24px; }
+    /* ===== QA Card (Ring Shadow) ===== */
+    .qa-card { background: #FAF9F5; border-radius: 12px; padding: 24px;
+        box-shadow: 0px 0px 0px 1px #F0EEE6; margin-bottom: 16px; }
 
     /* ===== Reference Tags ===== */
     .ref-tag { display: inline-block; background: #F5F4ED; color: #C96442; padding: 3px 10px;
-        border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #E8D5CC; }
+        border-radius: 20px; margin: 2px 4px; font-size: 12px;
+        box-shadow: 0px 0px 0px 1px #F0EEE6; }
 
     /* ===== Calendar ===== */
     .cal-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; text-align: center; }
@@ -2535,7 +2533,7 @@ if not st.session_state.logged_in:
         st.code("export AI_API_KEY='sk-xxx'  # Linux/Mac\nset AI_API_KEY=sk-xxx  # Windows", language="bash")
         st.stop()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📚 考研学习助手</h1>
         <p>多用户知识问答系统</p>
     </div>
@@ -2592,14 +2590,14 @@ if not st.session_state.logged_in:
 # ==================== Hub 主界面 ====================
 if st.session_state.page == "hub":
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📚 考研学习助手</h1>
         <p>请选择功能模块</p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f'<div style="font-size:0.88rem; color:#87867F; text-align:center; margin-bottom:0.3rem;">👋 {st.session_state.get("username", "?")}，欢迎回来</div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:1px; background:linear-gradient(90deg, transparent, #D97757, transparent); margin:0.5rem 25% 2rem 25%;"></div>', unsafe_allow_html=True)
+    st.markdown(f"##### 👋 {st.session_state.get('username', '?')}，欢迎回来")
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -2660,7 +2658,7 @@ if st.session_state.page == "hub":
 # ==================== 高校热度查询 ====================
 if st.session_state.page == "popularity":
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>🔥 高校热度查询</h1>
         <p>院校信息与报考热度分析</p>
     </div>
@@ -2790,7 +2788,7 @@ if st.session_state.page == "suggest":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>💬 提建议</h1>
         <p>有什么想法？尽管说——</p>
     </div>
@@ -2817,7 +2815,7 @@ if st.session_state.page == "english":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📖 考研英语专家</h1>
         <p>作文批改 · 长难句解析 · 翻译练习 · 单词记忆</p>
     </div>
@@ -3204,7 +3202,7 @@ if st.session_state.page == "checkin":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="app-header">
+    <div class="main-title">
         <h1>📅 打卡与督学</h1>
         <p>每日打卡 · 学习计划 · 学习日记 · 番茄计时</p>
     </div>
@@ -3643,7 +3641,7 @@ if st.button("← 返回首页", key="back_hub"):
 
 # 顶部标题
 st.markdown("""
-<div class="app-header">
+<div class="main-title">
     <h1>📚 考研学习助手</h1>
     <p>基于本地知识库的智能问答系统 | 支持自学习、遗忘曲线、经验积累</p>
 </div>

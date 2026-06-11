@@ -49,60 +49,32 @@ EXPERIENCE_FILE = "agent_experience.md"
 # ==================== CSS样式 ====================
 st.markdown("""
 <style>
-    .stApp { background: #F5F4ED; }
+    .main-title { background: linear-gradient(135deg, #d77757 0%, #e8926a 100%); padding: 1.5rem; border-radius: 1rem; color: white; text-align: center; margin-bottom: 1rem; }
+    .main-title h1 { font-size: 2rem; font-weight: 700; margin: 0; }
+    .main-title p { opacity: 0.9; margin-top: 0.5rem; }
 
-    /* ===== Claude-Header (Serif, Parchment) ===== */
-    .app-header { text-align: center; padding: 2.5rem 1rem 1rem 1rem; margin-bottom: 0.5rem; }
-    .app-header h1 { font-size: 2.2rem; font-weight: 500; margin: 0; line-height: 1.2;
-        color: #141413; font-family: Georgia, serif; }
-    .app-header p { font-size: 1.06rem; color: #5E5D59; margin-top: 0.4rem; font-family: Arial, sans-serif; }
+    .memory-card { padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #d77757; cursor: pointer; transition: all 0.3s; }
+    .memory-card:hover { transform: translateX(5px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); background: #fff; }
 
-    /* ===== Greeting ===== */
-    .greeting { font-size: 0.85rem; color: #87867F; margin-bottom: 0.3rem; text-align: center; }
+    .learning-card { padding: 8px; margin: 3px 0; background: #fff8f0; border-radius: 6px; border-left: 3px solid #e8926a; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+    .mastered-card { padding: 8px; margin: 3px 0; background: #f0faf4; border-radius: 6px; border-left: 3px solid #7cb896; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
-    /* ===== Hub Cards ===== */
-    .card-title { font-size: 1.3rem; font-weight: 500; color: #141413; margin-bottom: 0.2rem; font-family: Georgia, serif; }
-    .card-desc { font-size: 0.82rem; color: #5E5D59; line-height: 1.6; margin-bottom: 0.6rem; }
-    div[data-testid="stVerticalBlockBorderWrapper"] { transition: all 0.25s ease !important;
-        border-radius: 12px !important; box-shadow: 0px 0px 0px 1px #F0EEE6 !important; }
-    div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0px 0px 0px 1px #D1CFC5 !important; }
+    .qa-card { background: #fff; border-radius: 14px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(215,119,87,0.06); margin-bottom: 16px; }
+    .ref-tag { display: inline-block; background: #fef5f0; color: #8b5a3c; padding: 3px 10px; border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #f0ddd0; }
 
-    /* ===== Memory Cards ===== */
-    .memory-card { padding: 12px; margin: 8px 0; background: #FAF9F5; border-radius: 8px;
-        border-left: 4px solid #C96442; cursor: pointer; transition: all 0.3s; }
-    .memory-card:hover { transform: translateX(5px);
-        box-shadow: 0px 0px 0px 1px #D1CFC5; background: #FFFFFF; }
-
-    /* ===== Knowledge Cards ===== */
-    .learning-card { padding: 8px; margin: 3px 0; background: #FAF9F5; border-radius: 6px;
-        border-left: 3px solid #D97757; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-    .mastered-card { padding: 8px; margin: 3px 0; background: #ECFDF5; border-radius: 6px;
-        border-left: 3px solid #34D399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-
-    /* ===== QA Card (Ring Shadow) ===== */
-    .qa-card { background: #FAF9F5; border-radius: 12px; padding: 24px;
-        box-shadow: 0px 0px 0px 1px #F0EEE6; margin-bottom: 16px; }
-
-    /* ===== Reference Tags ===== */
-    .ref-tag { display: inline-block; background: #F5F4ED; color: #C96442; padding: 3px 10px;
-        border-radius: 20px; margin: 2px 4px; font-size: 12px;
-        box-shadow: 0px 0px 0px 1px #F0EEE6; }
-
-    /* ===== Calendar ===== */
     .cal-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; text-align: center; }
     .cal-grid .cal-cell { padding: 4px 0; }
     .cal-grid .cal-cell small { font-size: 11px; }
 
     @media (max-width: 1024px) {
-        .app-header h1 { font-size: 1.6rem !important; }
+        .main-title h1 { font-size: 1.6rem !important; }
         .qa-card { padding: 18px !important; }
     }
 
     @media (max-width: 768px) {
-        .app-header { padding: 1.5rem 0.5rem 0.5rem 0.5rem !important; }
-        .app-header h1 { font-size: 1.3rem !important; }
-        .app-header p { font-size: 0.88rem !important; }
+        .main-title { padding: 1rem !important; }
+        .main-title h1 { font-size: 1.3rem !important; }
+        .main-title p { font-size: 0.85rem !important; }
         .qa-card { padding: 14px !important; font-size: 14px !important; }
         .learning-card, .mastered-card { white-space: normal !important; font-size: 11px !important; }
         .memory-card { padding: 8px !important; font-size: 13px !important; }
@@ -114,8 +86,8 @@ st.markdown("""
     }
 
     @media (max-width: 480px) {
-        .app-header { padding: 1rem 0.3rem 0.3rem 0.3rem !important; }
-        .app-header h1 { font-size: 1.1rem !important; }
+        .main-title { padding: 0.8rem !important; }
+        .main-title h1 { font-size: 1.1rem !important; }
         .qa-card { padding: 10px !important; }
         .cal-grid { grid-template-columns: repeat(5, 1fr) !important; }
         div[data-testid="stMetricValue"] { font-size: 0.95rem !important; }

@@ -2080,7 +2080,8 @@ renderMathInElement(document.body,{{delimiters:[{{left:"$$",right:"$$",display:t
 </script>
 </body></html>"""
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        pdfkit.from_string(html, tmp.name, configuration=wk_path, options={
+        config = pdfkit.configuration(wkhtmltopdf=wk_path)
+        pdfkit.from_string(html, tmp.name, configuration=config, options={
             "enable-javascript": "",
             "javascript-delay": "2000",
             "encoding": "UTF-8",

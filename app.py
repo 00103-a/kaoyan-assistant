@@ -2040,35 +2040,23 @@ def _generate_material(prompt):
 
 def _ai_output_to_html(text):
     """将 AI 生成的 Markdown 包装为带 KaTeX 渲染的 HTML 文件"""
-    # 用 base64 避免转义问题
-    import base64
-    encoded = base64.b64encode(text.encode("utf-8")).decode()
+    safe = json.dumps(text, ensure_ascii=False)
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>
-body {{ font-family: Georgia, "宋体", serif; max-width: 800px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.8; color: #141413; }}
-h1 {{ font-size: 1.5rem; border-bottom: 1px solid #e8e6dc; padding-bottom: 0.5rem; }}
-h2 {{ font-size: 1.2rem; margin-top: 1.5rem; }}
-h3 {{ font-size: 1rem; color: #5e5d59; }}
+body{{font-family:Georgia,"宋体",serif;max-width:800px;margin:2rem auto;padding:0 1.5rem;line-height:1.8;color:#141413;white-space:pre-wrap}}
+h1{{font-size:1.5rem;border-bottom:1px solid #e8e6dc}}h2{{font-size:1.2rem;margin-top:1.5rem}}h3{{font-size:1rem;color:#5e5d59}}
 </style>
 </head>
 <body>
-<div id="math-container"></div>
 <script>
-document.getElementById("math-container").innerHTML = atob("{encoded}");
-renderMathInElement(document.getElementById("math-container"), {{
-    delimiters: [
-        {{left: "$$", right: "$$", display: true}},
-        {{left: "$", right: "$", display: false}}
-    ],
-    throwOnError: false
-}});
+document.body.innerHTML={safe};
+renderMathInElement(document.body,{{delimiters:[{{left:"$$",right:"$$",display:true}},{{left:"$",right:"$",display:false}}],throwOnError:false}});
 </script>
 </body>
 </html>"""

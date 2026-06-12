@@ -2038,29 +2038,38 @@ def _generate_material(prompt):
         raise RuntimeError(f"AI 调用失败: {e}")
 
 
-def _ai_output_to_html(text):
-    """将 AI 生成的 Markdown 包装为带 KaTeX 渲染的 HTML 文件"""
+def _ai_output_to_pdf(text):
+    """将 AI 生成的 Markdown 转为带 KaTeX 渲染的 PDF"""
+    import pdfkit
+    import tempfile
     safe = json.dumps(text, ensure_ascii=False)
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>
-body{{font-family:Georgia,"宋体",serif;max-width:800px;margin:2rem auto;padding:0 1.5rem;line-height:1.8;color:#141413;white-space:pre-wrap}}
+body{{font-family:Georgia,"宋体",serif;max-width:800px;margin:0 auto;padding:2rem;line-height:1.8;color:#141413;white-space:pre-wrap}}
 h1{{font-size:1.5rem;border-bottom:1px solid #e8e6dc}}h2{{font-size:1.2rem;margin-top:1.5rem}}h3{{font-size:1rem;color:#5e5d59}}
 </style>
 </head>
 <body>
+<div id="content"></div>
 <script>
-document.body.innerHTML={safe};
+document.getElementById("content").innerHTML={safe};
 renderMathInElement(document.body,{{delimiters:[{{left:"$$",right:"$$",display:true}},{{left:"$",right:"$",display:false}}],throwOnError:false}});
 </script>
-</body>
-</html>"""
-    return html.encode("utf-8")
+</body></html>"""
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        pdfkit.from_string(html, tmp.name, options={{
+            "enable-javascript": "",
+            "javascript-delay": "2000",
+            "encoding": "UTF-8",
+            "no-stop-slow-scripts": "",
+        }})
+        return Path(tmp.name).read_bytes()
 
 
 # ==================== 多Agent管线 ====================
@@ -3002,7 +3011,7 @@ if st.session_state.page == "material":
                     prompt = _build_material_prompt(selected_topics, user_requirement)
                     try:
                         reasoning, result_text = _generate_material(prompt)
-                        html_bytes = _ai_output_to_html(result_text)
+                        pdf_bytes = _ai_output_to_pdf(result_text)
 
                         # 简短展示思考过程
                         if reasoning:
@@ -3016,15 +3025,15 @@ if st.session_state.page == "material":
                         # 动态文件名：优先用选中的知识点，否则从用户需求中提取
                         if selected_topics:
                             base = selected_topics[0][:20] if len(selected_topics) == 1 else f"{selected_topics[0][:12]}等{len(selected_topics)}个知识点"
-                            file_name = f"{base}资料.html"
+                            file_name = f"{base}资料.pdf"
                         else:
                             kw = user_requirement.replace("帮我", "").replace("生成", "").replace("一份", "").strip()[:20]
-                            file_name = f"{kw}资料.html" if kw else "考研数学资料.docx"
+                            file_name = f"{kw}资料.pdf" if kw else "考研数学资料.pdf"
 
                         st.success(f"✅ 生成完成！共 {len(result_text)} 字")
                         st.download_button(
-                            label="📥 下载 HTML",
-                            data=html_bytes,
+                            label="📥 下载 PDF",
+                            data=pdf_bytes,
                             file_name=file_name,
                             mime="text/html",
                             key="mat_dl",

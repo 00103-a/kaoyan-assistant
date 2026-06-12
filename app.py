@@ -3945,12 +3945,6 @@ with tab1:
                         st.rerun()
                 with c2:
                     if st.button("🎓 概念自测", key=f"kb_s_cp_{kid}", use_container_width=True):
-                        concept_prompt = f"请针对知识点「{_clean_knowledge_name(kid)}」提出一个概念性问题，让学习者用自己的话解释核心思想。只输出问题，不要答案或解释。"
-                        resp = call_llm_api(concept_prompt, model="mimo-v2.5", max_tokens=200)
-                        lines = resp.split('\n')
-                        skip_kw = ['首先', '用户', '我需要', '应该', '注意', '题目', '问题', '要求', '输出']
-                        question_lines = [l for l in lines if l.strip() and not any(kw in l for kw in skip_kw)]
-                        st.session_state._kb_concept_quiz = '\n'.join(question_lines).strip() or resp
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
@@ -3998,14 +3992,15 @@ with tab1:
                             st.session_state.pop("_kb_concept_result", None)
                             st.session_state.pop("_kb_concept_qid", None)
                             st.rerun()
-                    elif concept_quiz:
-                        st.info(f"📝 {concept_quiz}")
+                    elif not st.session_state.get("_kb_concept_result"):
+                        concept_quiz_text = f"请用你自己的理解描述一下你对「{_clean_knowledge_name(kid)}」的想法与见解"
+                        st.info(f"📝 {concept_quiz_text}")
                         ans = st.text_area("你的回答", key=f"kb_s_ans_{kid}", height=120)
                         if st.button("📝 提交自测", key=f"kb_s_cp_sub_{kid}", use_container_width=True):
                             if ans.strip():
                                 with st.spinner("AI 正在评分..."):
                                     try:
-                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz, answer=ans)
+                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz_text, answer=ans)
                                         result = call_llm_api(prompt, model="mimo-v2.5")
                                         total = 0; sc = 0; se = 0; sa = 0
                                         m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
@@ -4038,12 +4033,6 @@ with tab1:
                         st.rerun()
                 with c2:
                     if st.button("🎓 概念自测", key=f"kb_d_cp_{kid}", use_container_width=True):
-                        concept_prompt = f"请针对知识点「{_clean_knowledge_name(kid)}」提出一个概念性问题，让学习者用自己的话解释核心思想。只输出问题，不要答案或解释。"
-                        resp = call_llm_api(concept_prompt, model="mimo-v2.5", max_tokens=200)
-                        lines = resp.split('\n')
-                        skip_kw = ['首先', '用户', '我需要', '应该', '注意', '题目', '问题', '要求', '输出']
-                        question_lines = [l for l in lines if l.strip() and not any(kw in l for kw in skip_kw)]
-                        st.session_state._kb_concept_quiz = '\n'.join(question_lines).strip() or resp
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
@@ -4091,14 +4080,15 @@ with tab1:
                             st.session_state.pop("_kb_concept_result", None)
                             st.session_state.pop("_kb_concept_qid", None)
                             st.rerun()
-                    elif concept_quiz:
-                        st.info(f"📝 {concept_quiz}")
+                    elif not st.session_state.get("_kb_concept_result"):
+                        concept_quiz_text = f"请用你自己的理解描述一下你对「{_clean_knowledge_name(kid)}」的想法与见解"
+                        st.info(f"📝 {concept_quiz_text}")
                         ans = st.text_area("你的回答", key=f"kb_d_cp_ans_{kid}", height=120)
                         if st.button("📝 提交自测", key=f"kb_d_cp_sub_{kid}", use_container_width=True):
                             if ans.strip():
                                 with st.spinner("AI 正在评分..."):
                                     try:
-                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz, answer=ans)
+                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz_text, answer=ans)
                                         result = call_llm_api(prompt, model="mimo-v2.5")
                                         total = 0; sc = 0; se = 0; sa = 0
                                         m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)

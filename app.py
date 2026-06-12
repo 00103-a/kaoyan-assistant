@@ -2063,12 +2063,12 @@ renderMathInElement(document.body,{{delimiters:[{{left:"$$",right:"$$",display:t
 </script>
 </body></html>"""
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        pdfkit.from_string(html, tmp.name, options={{
+        pdfkit.from_string(html, tmp.name, options={
             "enable-javascript": "",
             "javascript-delay": "2000",
             "encoding": "UTF-8",
             "no-stop-slow-scripts": "",
-        }})
+        })
         return Path(tmp.name).read_bytes()
 
 

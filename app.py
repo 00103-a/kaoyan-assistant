@@ -35,9 +35,9 @@ _cc.check_cache_replay_rules = lambda: None
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = os.environ.get("AI_API_KEY", "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6")
-API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
-MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
+API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
+API_BASE = "https://api.xiaomimimo.com/v1"
+MODEL_NAME = "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有

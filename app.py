@@ -3949,17 +3949,42 @@ with tab1:
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.pop("_kb_quiz", None)
-                    st.session_state.pop("_kb_qid", None)
+                    quiz = st.session_state.get("_kb_quiz")
                     if quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
+                        ans = st.text_area("你的解法", key=f"kb_s_ans_{kid}", height=150,
+                            placeholder="写下你的解题思路和答案...")
+                        if st.button("📝 提交自测", key=f"kb_s_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = PROBLEM_EVAL_PROMPT.format(question=quiz['questions'], answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[解题正确性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[解题过程\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        save_feynman_record(st.session_state.get("user_id"), "problem", quiz['questions'], ans, result, sc, se, sa, total)
+                                        st.markdown("### 📊 评分结果")
+                                        st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
+                                        st.session_state.pop("_kb_quiz", None)
+                                        st.session_state.pop("_kb_qid", None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的解法")
                 if st.session_state.get("_kb_concept_qid") == kid:
-                    concept_quiz = st.session_state.pop("_kb_concept_quiz", None)
-                    st.session_state.pop("_kb_concept_qid", None)
+                    concept_quiz = st.session_state.get("_kb_concept_quiz")
                     if concept_quiz:
                         st.info(f"📝 {concept_quiz}")
                         ans = st.text_area("你的回答", key=f"kb_s_ans_{kid}", height=120)
-                        if st.button("📝 提交自测", key=f"kb_s_sub_{kid}", use_container_width=True):
+                        if st.button("📝 提交自测", key=f"kb_s_cp_sub_{kid}", use_container_width=True):
                             if ans.strip():
                                 with st.spinner("AI 正在评分..."):
                                     try:
@@ -3977,6 +4002,8 @@ with tab1:
                                         save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
                                         st.markdown("### 📊 评分结果")
                                         st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
+                                        st.session_state.pop("_kb_concept_quiz", None)
+                                        st.session_state.pop("_kb_concept_qid", None)
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"评价失败: {e}")
@@ -4001,17 +4028,42 @@ with tab1:
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.pop("_kb_quiz", None)
-                    st.session_state.pop("_kb_qid", None)
+                    quiz = st.session_state.get("_kb_quiz")
                     if quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
+                        ans = st.text_area("你的解法", key=f"kb_d_ans_{kid}", height=150,
+                            placeholder="写下你的解题思路和答案...")
+                        if st.button("📝 提交自测", key=f"kb_d_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = PROBLEM_EVAL_PROMPT.format(question=quiz['questions'], answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[解题正确性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[解题过程\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        save_feynman_record(st.session_state.get("user_id"), "problem", quiz['questions'], ans, result, sc, se, sa, total)
+                                        st.markdown("### 📊 评分结果")
+                                        st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
+                                        st.session_state.pop("_kb_quiz", None)
+                                        st.session_state.pop("_kb_qid", None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的解法")
                 if st.session_state.get("_kb_concept_qid") == kid:
-                    concept_quiz = st.session_state.pop("_kb_concept_quiz", None)
-                    st.session_state.pop("_kb_concept_qid", None)
+                    concept_quiz = st.session_state.get("_kb_concept_quiz")
                     if concept_quiz:
                         st.info(f"📝 {concept_quiz}")
-                        ans = st.text_area("你的回答", key=f"kb_d_ans_{kid}", height=120)
-                        if st.button("📝 提交自测", key=f"kb_d_sub_{kid}", use_container_width=True):
+                        ans = st.text_area("你的回答", key=f"kb_d_cp_ans_{kid}", height=120)
+                        if st.button("📝 提交自测", key=f"kb_d_cp_sub_{kid}", use_container_width=True):
                             if ans.strip():
                                 with st.spinner("AI 正在评分..."):
                                     try:
@@ -4029,6 +4081,8 @@ with tab1:
                                         save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
                                         st.markdown("### 📊 评分结果")
                                         st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
+                                        st.session_state.pop("_kb_concept_quiz", None)
+                                        st.session_state.pop("_kb_concept_qid", None)
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"评价失败: {e}")

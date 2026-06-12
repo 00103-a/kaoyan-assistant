@@ -4127,6 +4127,62 @@ with tab4:
     else:
         st.info("暂无记录，开始你的第一次练习吧！")
 
+    # ── 知识库浏览 ──
+    with st.expander("📖 知识库浏览", expanded=False):
+        kb_search = st.text_input("🔍 搜索知识点", key="feynman_kb_search",
+            label_visibility="collapsed", placeholder="搜索知识点...")
+        if kb_search:
+            kb_items = search_corpus(kb_search, filtered_corpus, top_k=20)
+        else:
+            kb_items = [{"id": d['id'], "text": d["text"], "score": 1} for d in filtered_corpus[:30]]
+        for item in kb_items:
+            kid = item['id']
+            with st.expander(f"📄 {_clean_knowledge_name(kid)}"):
+                st.markdown(item['text'][:1500])
+                if st.button("🎲 AI出题", key=f"feyn_kb_qz_{kid}"):
+                    st.session_state._feyn_kb_quiz = generate_review_questions([{"knowledge_id": kid}])
+                    st.session_state._feyn_kb_qid = kid
+                    st.rerun()
+                if st.session_state.get("_feyn_kb_qid") == kid:
+                    quiz = st.session_state.get("_feyn_kb_quiz")
+                    if quiz and quiz.get("success"):
+                        render_qa_cards(quiz['questions'], columns=1, typing=True)
+                        self_ans = st.text_area("你的答案", key=f"fe_kb_ans_{kid}", height=120,
+                            placeholder="写下你的答案...")
+                        if st.button("📝 提交自测", key=f"fe_kb_sub_{kid}"):
+                            if self_ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        eval_prompt = CONCEPT_EVAL_PROMPT if mode_key == "concept" else PROBLEM_EVAL_PROMPT
+                                        prompt = eval_prompt.format(question=quiz['questions'], answer=self_ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total_score = 0; score_correct = 0; score_expression = 0; score_authentic = 0
+                                        score_match = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if score_match:
+                                            total_score = int(score_match.group(1))
+                                        correct_match = re.search(r'\[(?:概念理解|解题正确性)\]\s*(\d+)/(\d+)分', result)
+                                        if correct_match:
+                                            score_correct = int(correct_match.group(1))
+                                        expr_match = re.search(r'\[(?:表达能力|解题过程)\]\s*(\d+)/(\d+)分', result)
+                                        if expr_match:
+                                            score_expression = int(expr_match.group(1))
+                                        auth_match = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if auth_match:
+                                            score_authentic = int(auth_match.group(1))
+                                        save_feynman_record(
+                                            st.session_state.get("user_id"), mode_key,
+                                            quiz['questions'], self_ans, result,
+                                            score_correct, score_expression, score_authentic, total_score)
+                                        st.markdown("### 📊 评分结果")
+                                        st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
+                                        st.session_state.pop("_feyn_kb_qid", None)
+                                        st.session_state.pop("_feyn_kb_quiz", None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的答案")
+
 with tab3:
     st.subheader("🧠 知识点掌握情况")
     conn = sqlite3.connect(MEMORY_DB)

@@ -2771,79 +2771,63 @@ if not st.session_state.logged_in:
 
     st.stop()
 
-# ==================== Hub 主界面 ====================
+# ==================== 备考看板 ====================
 if st.session_state.page == "hub":
     st.markdown("""
     <div class="main-title">
-        <h1>📚 考研学习助手</h1>
-        <p>请选择功能模块</p>
+        <h1>🏠 备考看板</h1>
+        <p>坚持就是胜利！</p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"##### 👋 {st.session_state.get('username', '?')}，欢迎回来")
+    st.markdown(f'<div style="font-size:0.88rem; color:#64748B; text-align:center; margin-bottom:1rem;">👋 {st.session_state.get("username", "?")}，欢迎回来 · 2025届考研人</div>', unsafe_allow_html=True)
+
+    # 数据概览
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("今日专注", "120 分钟")
+    with col2:
+        st.metric("连续打卡", "5 天")
+    with col3:
+        st.metric("掌握知识点", f"{get_memory_stats()['mastered']} 个")
+    with col4:
+        st.metric("待复习", f"{get_memory_stats()['learning']} 个")
+
     st.markdown("---")
 
+    # 快捷入口
     col1, col2 = st.columns(2)
     with col1:
         with st.container(border=True):
-            st.markdown("### 📐 考研数学问答工具")
-            st.caption("110个知识点 · 智能问答 · 遗忘曲线复习")
-            if st.button("进入问答工具", key="hub_qa", use_container_width=True):
+            st.markdown("### 🧠 AI 自习室")
+            st.caption("数学问答 · 英语批改 · 智能辅导")
+            if st.button("进入自习室", key="hub_ai", use_container_width=True):
                 st.session_state.page = "main"
                 st.rerun()
     with col2:
         with st.container(border=True):
-            st.markdown("### 🔥 高校热度查询")
-            st.caption("查院校 · 看数据 · 备考参考")
-            if st.button("进入热度查询", key="hub_pop", use_container_width=True):
-                st.session_state.page = "popularity"
+            st.markdown("### 📂 资料与择校")
+            st.caption("学习资料生成 · 高校热度查询")
+            if st.button("进入资料中心", key="hub_mat", use_container_width=True):
+                st.session_state.page = "material"
                 st.rerun()
 
     col3, col4 = st.columns(2)
     with col3:
         with st.container(border=True):
-            st.markdown("### 📖 英语专家")
-            st.caption("作文批改 · 长难句解析 · 翻译 · 单词记忆")
-            if st.button("进入英语专家", key="hub_english", use_container_width=True):
-                st.session_state.page = "english"
+            st.markdown("### ⏱️ 打卡督学")
+            st.caption("每日打卡 · 学习计划 · 番茄计时")
+            if st.button("进入打卡", key="hub_ck", use_container_width=True):
+                st.session_state.page = "checkin"
                 st.rerun()
     with col4:
         with st.container(border=True):
             st.markdown("### 💬 提建议")
             st.caption("反馈问题 · 提出需求")
-            if st.button("提交建议", key="hub_suggest", use_container_width=True):
+            if st.button("提交建议", key="hub_sug", use_container_width=True):
                 st.session_state.page = "suggest"
                 st.rerun()
 
-    with st.container(border=True):
-        st.markdown("### 📚 学习资料")
-        st.caption("AI 生成习题册 · 知识点整理 · 备考资料")
-        if st.button("进入学习资料", key="hub_material", use_container_width=True):
-            st.session_state.page = "material"
-            st.rerun()
-
-    with st.container(border=True):
-        st.markdown("### 📅 打卡督学")
-        st.caption("每日打卡 · 学习计划 · 学习日记 · 番茄计时")
-        if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
-            st.session_state.page = "checkin"
-            st.rerun()
-
-    # （专业知识库入口已移至独立模块，暂不显示）
-    # with st.container(border=True):
-    #     st.markdown("### 📚 专业知识库")
-    #     st.caption("上传资料 · OCR识别 · 错题本 · 复习本 · AI出题")
-    #     if st.button("进入知识库", key="hub_knowledge", use_container_width=True):
-    #         st.session_state.page = "knowledge"
-    #         st.rerun()
-
-    if st.button("🚪 退出登录", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
-        cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
-        st.rerun()
     st.stop()
 
 # ==================== 侧边栏导航 ====================

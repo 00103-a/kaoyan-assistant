@@ -1396,7 +1396,7 @@ def generate_plan(user_id, target_date, math_type, daily_hours):
 
     profile_text = "\n".join(profile_lines) if profile_lines else "（用户尚未填写画像信息）"
 
-    prompt = f"""你是考研学习规划专家，请结合用户画像生成个性化学习计划。
+    prompt = f"""你是考研学习规划专家。请生成一份结构化的学习时间表。
 
 ## 用户画像
 {profile_text}
@@ -1409,16 +1409,34 @@ def generate_plan(user_id, target_date, math_type, daily_hours):
 - 当前阶段：{phase}
 - 各科权重：{json.dumps(weights, ensure_ascii=False)}
 
-## 输出要求
-请以一段连贯流畅的文字输出学习计划建议（不是列表/表格），内容涵盖：
-- 年度整体规划和阶段划分
-- 当前阶段的重点方向
-- 本周的具体安排
-- 每日的任务建议
-- 针对用户画像的个性化建议和鼓励
+## 输出格式要求
 
-要求：像一位经验丰富的老师在给学生写信，语气亲切、有温度、可执行。结合记忆遗忘曲线设计。
-"""
+请以 **Markdown 表格 + 简要说明** 的格式输出，不要长篇抒情，语气简洁专业：
+
+### 1. 每日时间表
+用表格输出，例如：
+```
+| 时间段 | 科目 | 任务重点 | 建议时长 |
+|--------|------|----------|----------|
+| 08:00-12:00 | 数学 | 专题突破+真题训练 | 4h |
+| 14:00-17:00 | 英语 | 阅读理解+单词 | 3h |
+| 19:00-21:00 | 政治 | 章节梳理+选择题 | 2h |
+| 21:00-22:00 | 总结整理 | 错题回顾+明日计划 | 1h |
+```
+
+### 2. 时间段分配原则
+- 上午安排需要高度专注的科目（如数学、专业课）
+- 下午安排语言类科目（如英语）
+- 晚上安排记忆和政治类科目
+- 根据弱科（{', '.join(weak_subjects) if weak_subjects else '无'}）优先分配黄金时间段
+- 每科之间留10-15分钟休息
+
+### 3. 每周计划概述
+- 周一至周五：按时间表执行
+- 周六：模拟测试+批改分析
+- 周日：本周错题复习+下周计划调整
+
+请直接输出，无需额外说明。"""
     description = call_llm_api(prompt, model="mimo-v2.5")
     return {"description": description, "tasks": tasks, "phase": phase, "weights": weights, "daily_sub_hours": daily_sub_hours}
 

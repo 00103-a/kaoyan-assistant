@@ -1,5 +1,6 @@
 # 用户数据
 data/memory.db
+data/user_materials/
 agent_experience_*.md
 
 # 构建产物
@@ -11,13 +12,11 @@ __pycache__/
 .vscode/
 .idea/
 
-# Streamlit
-.streamlit/
+# 敏感文件
+.env
 
-# 依赖
-node_modules/
+# 日志
+*.log
 
 # 临时文件
-*.log
-test_*.py
-temp/
+copy_to_git.py

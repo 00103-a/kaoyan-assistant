@@ -32,7 +32,7 @@ _policies.check_cache_replay_rules = lambda: None
 _cc.check_cache_replay_rules = lambda: None
 
 # ==================== 配置 ====================
-st.set_page_config(page_title="研途 - 考研助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
 API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
@@ -53,19 +53,18 @@ EXPERIENCE_FILE = "agent_experience.md"
 # ==================== CSS样式 ====================
 st.markdown("""
 <style>
-    .stApp { background-color: #F8FAFC; color: #1E293B; }
-    .main-title { background: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%); padding: 1.5rem; border-radius: 1rem; color: white; text-align: center; margin-bottom: 1rem; }
+    .main-title { background: linear-gradient(135deg, #d77757 0%, #e8926a 100%); padding: 1.5rem; border-radius: 1rem; color: white; text-align: center; margin-bottom: 1rem; }
     .main-title h1 { font-size: 2rem; font-weight: 700; margin: 0; }
     .main-title p { opacity: 0.9; margin-top: 0.5rem; }
 
-    .memory-card { padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #3B82F6; cursor: pointer; transition: all 0.3s; }
-    .memory-card:hover { transform: translateX(5px); box-shadow: 0 4px 8px rgba(59,130,246,0.15); background: #fff; }
+    .memory-card { padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #d77757; cursor: pointer; transition: all 0.3s; }
+    .memory-card:hover { transform: translateX(5px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); background: #fff; }
 
-    .learning-card { padding: 8px; margin: 3px 0; background: #EFF6FF; border-radius: 6px; border-left: 3px solid #60A5FA; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+    .learning-card { padding: 8px; margin: 3px 0; background: #fff8f0; border-radius: 6px; border-left: 3px solid #e8926a; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
     .mastered-card { padding: 8px; margin: 3px 0; background: #f0faf4; border-radius: 6px; border-left: 3px solid #7cb896; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 
-    .qa-card { background: #fff; border-radius: 14px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(59,130,246,0.06); margin-bottom: 16px; }
-    .ref-tag { display: inline-block; background: #EFF6FF; color: #3B82F6; padding: 3px 10px; border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #BFDBFE; }
+    .qa-card { background: #fff; border-radius: 14px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(215,119,87,0.06); margin-bottom: 16px; }
+    .ref-tag { display: inline-block; background: #fef5f0; color: #8b5a3c; padding: 3px 10px; border-radius: 20px; margin: 2px 4px; font-size: 12px; border: 1px solid #f0ddd0; }
 
     .cal-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; text-align: center; }
     .cal-grid .cal-cell { padding: 4px 0; }
@@ -2845,36 +2844,6 @@ if st.session_state.page == "hub":
         st.session_state.page = "hub"
         st.rerun()
     st.stop()
-
-# ==================== 侧边栏导航 ====================
-with st.sidebar:
-    st.markdown("### 📚 研途学习助手")
-    st.markdown("---")
-    current_page = st.radio(
-        "功能导航",
-        ["🏠 备考看板", "🧠 AI 自习室", "⏱️ 打卡督学", "📂 资料与择校"],
-        label_visibility="collapsed"
-    )
-    st.markdown("---")
-    username = st.session_state.get("username", "?")
-    st.caption(f"👤 {username}")
-    st.caption("2025届考研人")
-    if st.button("🚪 退出登录", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
-        cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
-        st.rerun()
-
-# 映射侧边栏到 st.session_state.page
-_page_map = {
-    "🏠 备考看板": "hub",
-    "🧠 AI 自习室": "main",
-    "⏱️ 打卡督学": "checkin",
-    "📂 资料与择校": "material",
-}
-st.session_state.page = _page_map.get(current_page, "hub")
 
 # ==================== 高校热度查询 ====================
 if st.session_state.page == "popularity":

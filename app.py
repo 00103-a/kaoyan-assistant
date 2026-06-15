@@ -2249,7 +2249,11 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000):
     )
     with urllib.request.urlopen(req, timeout=90) as resp:
         msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
-        return msg.get("content") or msg.get("reasoning_content") or ""
+        c = msg.get("content")
+        raw_full = c if isinstance(c, str) else ""
+        if not raw_full:
+            raw_full = msg.get("reasoning_content") or ""
+        return raw_full
 
 # 费曼学习法评价提示词
 CONCEPT_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心理学专家。你的任务是评价学生对数学概念的理解和表达能力。
@@ -2628,7 +2632,7 @@ def generate_review_questions(knowledge_points):
         kb_list = "\n".join(kb_lines)
         context_text = "\n\n".join(contexts) if contexts else ""
 
-        system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
+        system_prompt = r"""你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。
@@ -2679,7 +2683,8 @@ EXPLAIN: 解析过程
             result = json.loads(response.read().decode('utf-8'))
             msg = result['choices'][0]['message']
             # MiMo 思维链模型：content 和 reasoning_content 都可能包含答案
-            content = msg.get('content') or ''
+            c = msg.get('content')
+            content = c if isinstance(c, str) else ''
             reasoning = msg.get('reasoning_content') or ''
             raw = content if content and 'Q:' in content else ''
             # 从 reasoning_content 中提取 Q:...--- 格式
@@ -2906,6 +2911,16 @@ def _ai_output_to_docx_via_pandoc(markdown_text):
         with open(docx_path, "rb") as f:
             result = f.read()
         return result
+    except (FileNotFoundError, subprocess.SubprocessError):
+        # Pandoc 不可用，用 python-docx 兜底
+        from docx import Document as DocxDoc
+        doc = DocxDoc()
+        for line in markdown_text.split("\n"):
+            doc.add_paragraph(line)
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf.read()
     finally:
         if os.path.exists(md_path):
             os.unlink(md_path)
@@ -3048,7 +3063,10 @@ def run_pipeline(query, results, model_name, img_data=None):
                         obj = json.loads(payload)
                         delta_obj = obj.get("choices", [{}])[0].get("delta", {})
                         # MiMo 是思维链模型，内容在 reasoning_content 中
-                        delta = delta_obj.get("content") or delta_obj.get("reasoning_content") or ""
+                        c = delta_obj.get("content")
+                        delta = c if isinstance(c, str) else ""
+                        if not delta:
+                            delta = delta_obj.get("reasoning_content") or ""
                         if delta:
                             raw_full += delta
                             yield {"type": "token", "content": delta}
@@ -3066,7 +3084,10 @@ def run_pipeline(query, results, model_name, img_data=None):
             req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
             with urllib.request.urlopen(req, timeout=180) as resp:
                 msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
-                raw_full = msg.get('content') or msg.get('reasoning_content') or ''
+                c = msg.get('content')
+                raw_full = c if isinstance(c, str) else ''
+                if not raw_full:
+                    raw_full = msg.get('reasoning_content') or ''
                 yield {"type": "token", "content": raw_full}
             result = parse_multi_output(raw_full)
             result["_raw_debug"] = raw_full[:500]

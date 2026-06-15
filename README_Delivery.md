@@ -1009,7 +1009,81 @@ app.py              admin.py
 
 ---
 
+---
+
+## 15. 2026-06-15~16 本地联调 & Bug 修复
+
+> **协作人：zy + Claude Code AI**
+> **目标：拉取新 UI 代码、配置 API、全面测试、修复 bug、建立回退机制**
+
+### 15.1 API 迁移：DeepSeek → MiMo v2.5
+
+| 项目 | 旧值 | 新值 |
+|------|------|------|
+| API 地址 | `api.deepseek.com/v1` | `api.xiaomimimo.com/v1` |
+| 模型 | `deepseek-chat` | `mimo-v2.5` |
+| API Key | 自有 | 团队统一 key（硬编码于 app.py:39） |
+
+**技术要点**：MiMo 是思维链模型，返回格式特殊：
+- `content` 字段可能为 `[]`（空列表，Python 中 truthy）
+- 实际内容在 `reasoning_content` 字段
+- 新代码已全局使用 `_extract_content()` helper（`app.py:778`）统一处理
+
+### 15.2 修复清单
+
+| # | 问题 | 根因 | 修复 | 状态 |
+|---|------|------|------|------|
+| 1 | 智能问答连不上 API | `content: []` 空列表被当作有效值 | `_extract_content()` helper | ✅ |
+| 2 | 401 Unauthorized | API Key 占位符 | 替换为团队 key | ✅ |
+| 3 | 生成资料报错 | Pandoc 未安装 | python-docx fallback | ✅ |
+| 4 | `kaoyan_predict` 缺失 | 新 UI 误删 | 从备份恢复 | ✅ |
+| 5 | `recommend.py` 缺失 | 新 UI 误删 | 从备份恢复 | ✅ |
+
+### 15.3 测试报告
+
+| 模块 | 结果 | 备注 |
+|------|------|------|
+| 💬 智能问答 | ✅ | MiMo 思维链模型，速度较慢属正常 |
+| 🎲 出题功能 | ✅ | 同上 |
+| 📝 英语专家 | ✅ | |
+| 🏫 高校热度 | ⚠️ | 部分外部平台抓取失败（非本系统问题） |
+| ✅ 打卡督学 | ✅ | |
+| 📚 专业知识库 | ✅ | 生成资料功能已修复 |
+
+### 15.4 Git 分支管理
+
+```
+master                      ← 当前工作分支（新 UI + 修复）
+backup-20260615-225218      ← 旧版完整备份
+new-ui-20260616-004109      ← 新 UI 原始快照
+```
+
+**回退命令**：
+```bash
+git checkout backup-20260615-225218  # 回到旧版
+git reset --hard <commit>           # 硬回退
+```
+
+### 15.5 模块化建议
+
+当前 `app.py` ~4700 行，建议后续拆分：
+
+| 优先级 | 模块 | 建议文件 |
+|--------|------|----------|
+| P0 | API 调用层 | `api_client.py` |
+| P1 | UI 组件 | `ui_components.py` |
+| P1 | 数据库操作 | `db.py` |
+| P2 | 页面路由 | 各页面拆分为 `pages/*.py` |
+
+### 15.6 下次工作建议
+
+1. **Pandoc 全局安装**：python-docx fallback 可用，但 Pandoc 渲染 LaTeX 更好
+2. **前端弃用**：`st.components.v1.html` → `st.iframe`（约 3 处）
+3. **API Key 安全**：当前 key 硬编码，提交前需确认已清除
+
+---
+
 <p align="center">
-  <strong>交付日期：2026年5月22日</strong><br>
-  <strong>版本：4.5 (UI重构)</strong>
+  <strong>交付日期：2026年6月16日</strong><br>
+  <strong>版本：5.0 (本地联调 + Bug 修复)</strong>
 </p>

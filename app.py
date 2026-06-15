@@ -3894,16 +3894,18 @@ if st.session_state.page == "hub":
     # ══════════════════════════════════════
 
     # ── Row 1: Hero (2/3) + Metric (1/3) ──
+    _exam_date = datetime(2026, 12, 21)
+    _days_left = (_exam_date - datetime.now()).days
     h_left, h_right = st.columns([2, 1])
     with h_left:
-        st.markdown("""
+        st.markdown(f"""
         <div class="main-title" style="text-align:left;display:flex;justify-content:space-between;align-items:center;">
             <div>
                 <h1 style="font-size:1.5rem!important;">2026 年全国统考倒计时</h1>
                 <p>星光不问赶路人，时光不负有心人</p>
             </div>
             <div style="background:rgba(255,255,255,0.1);padding:1rem 1.5rem;border-radius:12px;border:1px solid rgba(255,255,255,0.12);text-align:center;">
-                <span style="font-size:2.5rem;font-weight:900;display:block;line-height:1;">190</span>
+                <span style="font-size:2.5rem;font-weight:900;display:block;line-height:1;">{_days_left}</span>
                 <span style="font-size:0.7rem;letter-spacing:2px;opacity:0.55;">DAYS LEFT</span>
             </div>
         </div>

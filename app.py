@@ -2259,7 +2259,7 @@ def _append_debug_log(entry):
 
 
 def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
-    """调用 LLM API（非流式）+ 调试日志"""
+    """调用 LLM API（非流式）+ 调试日志 + 自动重试"""
     _init_debug_log()
     t0 = datetime.now()
     log_entry = {
@@ -2276,44 +2276,68 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
         "max_tokens": max_tokens,
         "temperature": temperature
     }
-    try:
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            raw_body = resp.read().decode("utf-8")
-            msg = json.loads(raw_body)["choices"][0]["message"]
-            c = msg.get("content")
-            raw_full = c if isinstance(c, str) else ""
-            if not raw_full:
-                raw_full = msg.get("reasoning_content") or ""
-            # 记录原始响应信息
-            log_entry["raw_content_len"] = len(c) if isinstance(c, str) else 0
-            log_entry["raw_reasoning_len"] = len(msg.get("reasoning_content") or "")
-            log_entry["raw_full_len"] = len(raw_full)
-            log_entry["raw_preview"] = raw_full[:300]
-            # 清洗
-            cleaned = _clean_mimo_output(raw_full, prompt)
-            log_entry["cleaned_len"] = len(cleaned)
-            log_entry["cleaned_preview"] = cleaned[:300]
+    last_error = None
+    for attempt in range(3):  # 最多重试 2 次（共 3 次尝试）
+        try:
+            req = urllib.request.Request(
+                API_BASE + "/chat/completions",
+                data=json.dumps(data).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                raw_body = resp.read().decode("utf-8")
+                msg = json.loads(raw_body)["choices"][0]["message"]
+                c = msg.get("content")
+                # 修复: content 可能是空列表 []（MiMo 思维链特征）
+                raw_full = c if isinstance(c, str) and c != "" else ""
+                used_reasoning = False
+                if not raw_full:
+                    raw_full = msg.get("reasoning_content") or ""
+                    used_reasoning = bool(raw_full)
+                # 记录原始响应信息
+                log_entry["raw_content_len"] = len(c) if isinstance(c, str) else (len(c) if isinstance(c, list) else 0)
+                log_entry["raw_reasoning_len"] = len(msg.get("reasoning_content") or "")
+                log_entry["raw_full_len"] = len(raw_full)
+                log_entry["raw_preview"] = raw_full[:300]
+                log_entry["used_reasoning"] = used_reasoning
+                if attempt > 0:
+                    log_entry["retry_attempt"] = attempt
+                # 清洗
+                cleaned = _clean_mimo_output(raw_full, prompt, used_reasoning=used_reasoning)
+                log_entry["cleaned_len"] = len(cleaned)
+                log_entry["cleaned_preview"] = cleaned[:300]
+                log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
+                log_entry["status"] = "ok"
+                _append_debug_log(log_entry)
+                return cleaned
+        except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as e:
+            last_error = e
+            if attempt < 2:
+                wait_s = (attempt + 1) * 1.5  # 1.5s, 3s 退避
+                time.sleep(wait_s)
+                continue
+            break  # 最后一次也失败了
+        except Exception as e:
+            # 非网络错误（如 JSON 解析失败），不重试
+            log_entry["status"] = "error"
+            log_entry["error"] = str(e)
+            log_entry["traceback"] = traceback.format_exc()[-500:]
             log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
-            log_entry["status"] = "ok"
             _append_debug_log(log_entry)
-            return cleaned
-    except Exception as e:
-        log_entry["status"] = "error"
-        log_entry["error"] = str(e)
-        log_entry["traceback"] = traceback.format_exc()[-500:]
-        log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
-        _append_debug_log(log_entry)
-        raise
+            raise
+    # 所有重试均失败
+    log_entry["status"] = "error"
+    log_entry["error"] = str(last_error)
+    log_entry["retries"] = 3
+    log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
+    _append_debug_log(log_entry)
+    raise last_error
 
 
-def _clean_mimo_output(raw_text, prompt=""):
-    """清洗 MiMo 思维链输出：去回显、滤思考行、留正文"""
+def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
+    """清洗 MiMo 思维链输出：去回显、滤思考行、留正文
+    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content，需要更强力的清洗"""
     if not raw_text or len(raw_text) < 5:
         return raw_text
     text = raw_text.strip()
@@ -2325,28 +2349,43 @@ def _clean_mimo_output(raw_text, prompt=""):
         '好的', '让我', '首先', '根据', '综上', '因此', '注意', '这个', '该知',
         '我们', '需要', '可以', '这里', '现在', '接下来', '最后', '总的', '所以',
         'Okay', 'Let', 'First', 'I need', 'The user',
+        # 新增：MiMo 常见思维链开局
+        '用户', '问题是', '题目', '要解', '已知', '分析', '考虑', '理解',
+        '回顾', '判断', '比较', '计算', '推导', '综合', '综上所',
+        '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
+        '首先，', '接下来，', '最后，', '然后，', '接着，',
+        '根据题目', '从题目', '由题意', '观察', '对比', '得到',
+    )
+    _think_keywords = (
+        '知识点是', '用户要求', '定义如下', '给出答案', '任务是', '需要生成',
+        '我的思考', '思路如下', '步骤是', '解题思路', '推理过程',
+        '思考过程', '分析如下', '解答如下', '详细说明', '解释如下',
     )
     lines = text.split('\n')
     total_lines = len(lines)
     clean_lines = []
-    filtered_reasons = []  # 记录被过滤的原因
+    filtered_reasons = []
+    think_line_count = 0  # 统计思维链行数
     for line in lines:
         s = line.strip()
         if not s:
             continue
         if s.startswith(_think_starts):
-            filtered_reasons.append(f"think_start: {s[:30]}")
+            think_line_count += 1
+            if len(filtered_reasons) < 10:
+                filtered_reasons.append(f"think_start: {s[:30]}")
             continue
-        if '知识点是' in s or '用户要求' in s or '定义如下' in s:
-            filtered_reasons.append(f"keyword: {s[:30]}")
+        if any(kw in s for kw in _think_keywords):
+            think_line_count += 1
+            if len(filtered_reasons) < 10:
+                filtered_reasons.append(f"keyword: {s[:30]}")
             continue
         clean_lines.append(line)
     all_filtered = (len(clean_lines) == 0)
     if not clean_lines:
-        # 全被过滤了，记录统计后返回原文
-        _record_clean_stats(total_lines, len(lines) - len(clean_lines), 0,
+        _record_clean_stats(total_lines, total_lines - len(clean_lines), 0,
                            len(lines), False, True, filtered_reasons)
-        return text
+        return text  # 全被过滤了，返回原文（让用户至少看到点东西）
     # 3. 找第一个编号行，从那里开始取
     start_idx = 0
     for i, line in enumerate(clean_lines):
@@ -2354,28 +2393,39 @@ def _clean_mimo_output(raw_text, prompt=""):
             start_idx = i
             break
     result_lines = clean_lines[start_idx:]
+    # 4. 如果 reasoning_content 回退 + 思维链占比 > 60%，尝试只提取编号行
+    think_ratio = think_line_count / max(total_lines, 1)
+    if used_reasoning and think_ratio > 0.6:
+        numbered_only = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
+        if numbered_only:
+            result_lines = numbered_only
+            filtered_reasons.append("reasoning_fallback: 仅提取编号行")
+    # 5. 如果结果还是太长（>15行），只保留前10行
     was_truncated = len(result_lines) > 15
-    # 4. 如果结果还是太长（>15行），只保留前10行
     if was_truncated:
         result_lines = result_lines[:10]
-    _record_clean_stats(total_lines, len(lines) - len(clean_lines), start_idx,
-                       len(result_lines), was_truncated, all_filtered, filtered_reasons)
+    _record_clean_stats(total_lines, total_lines - len(clean_lines), start_idx,
+                       len(result_lines), was_truncated, all_filtered, filtered_reasons,
+                       think_ratio=think_ratio, used_reasoning=used_reasoning)
     return '\n'.join(result_lines).strip()
 
 
 def _record_clean_stats(total_lines, filtered_count, start_idx, result_count,
-                        was_truncated, all_filtered, filtered_reasons):
+                        was_truncated, all_filtered, filtered_reasons,
+                        think_ratio=0, used_reasoning=False):
     """记录清洗统计到最近一条调试日志"""
     logs = st.session_state.get("debug_logs", [])
     if logs and logs[-1].get("status") in ("ok", None):
         logs[-1]["clean_stats"] = {
             "total_lines": total_lines,
             "filtered_count": filtered_count,
+            "think_ratio": f"{think_ratio:.0%}",
+            "used_reasoning": used_reasoning,
             "start_idx": start_idx,
             "result_count": result_count,
             "was_truncated": was_truncated,
             "all_filtered": all_filtered,
-            "filtered_reasons": filtered_reasons[:5],  # 最多保留 5 条原因
+            "filtered_reasons": filtered_reasons[:5],
         }
 
 

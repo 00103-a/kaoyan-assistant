@@ -2277,7 +2277,11 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
         "temperature": temperature
     }
     last_error = None
-    for attempt in range(3):  # 最多重试 2 次（共 3 次尝试）
+    max_retries = 5
+    for attempt in range(max_retries):
+        if attempt > 0:
+            wait_s = 2 ** attempt  # 2s, 4s, 8s, 16s 指数退避
+            time.sleep(wait_s)
         try:
             req = urllib.request.Request(
                 API_BASE + "/chat/completions",
@@ -2313,11 +2317,8 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
                 return cleaned
         except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as e:
             last_error = e
-            if attempt < 2:
-                wait_s = (attempt + 1) * 1.5  # 1.5s, 3s 退避
-                time.sleep(wait_s)
+            if attempt < max_retries - 1:
                 continue
-            break  # 最后一次也失败了
         except Exception as e:
             # 非网络错误（如 JSON 解析失败），不重试
             log_entry["status"] = "error"
@@ -4236,13 +4237,28 @@ if st.session_state.page == "main":
                         st.session_state[f"show_{doc_id}"] = not st.session_state.get(f"show_{doc_id}", False)
                 with b2:
                     if st.button("出题", key=f"quiz_{doc_id}", use_container_width=True):
-                        prompt = f"请根据以下知识点出一道考研数学题，并给出解答：\n{doc_text[:500]}"
+                        prompt = f"""<role>考研数学命题专家</role>
+<task>根据知识点出一道考研数学题，并给出详细解答</task>
+<knowledge>
+{doc_text[:500]}
+</knowledge>
+<rules>
+- 必须同时包含[题目]和[解答]两个部分
+- 题目难度匹配考研真题，解答包含关键公式推导
+- 禁止输出思考过程、开场白、无关讨论
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
                         try:
-                            quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=1200, temperature=0.2)
+                            quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.2)
                             if quiz and len(quiz) > 20:
-                                rendered = _escape_md(_collapse_math(_fix_latex(quiz)))
+                                rendered = _collapse_math(_fix_latex(quiz))
                                 st.markdown(f"""
-                                <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #cbd5e1;border-radius:12px;padding:20px 22px;font-size:0.90rem;color:#1e293b;line-height:1.85;max-height:650px;overflow-y:auto;white-space:pre-wrap;">
+                                <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #cbd5e1;border-radius:12px;padding:20px 22px;font-size:0.90rem;color:#1e293b;line-height:1.85;max-height:650px;overflow-y:auto;">
                                 {rendered}
                                 </div>
                                 """, unsafe_allow_html=True)
@@ -4274,7 +4290,7 @@ if st.session_state.page == "main":
                             concept = call_llm_api(prompt, model="mimo-v2.5", max_tokens=600, temperature=0.2)
                             has_numbered = bool(re.search(r'^\d+[\.\、\)\)]', concept, re.MULTILINE)) if concept else False
                             if concept and len(concept) > 10 and has_numbered:
-                                rendered = _escape_md(_collapse_math(_fix_latex(concept)))
+                                rendered = _collapse_math(_fix_latex(concept))
                                 st.markdown(f"""
                                 <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #cbd5e1;border-radius:12px;padding:20px 22px;font-size:0.90rem;color:#1e293b;line-height:1.85;max-height:650px;overflow-y:auto;">
                                 {rendered}
@@ -4374,13 +4390,28 @@ if st.session_state.page == "main":
                                 doc_text = d.get("text", "")[:500]
                                 break
                         if doc_text:
-                            prompt = f"请根据以下知识点出一道考研数学题，并给出解答：\n{doc_text}"
+                            prompt = f"""<role>考研数学命题专家</role>
+<task>根据知识点出一道考研数学题，并给出详细解答</task>
+<knowledge>
+{doc_text}
+</knowledge>
+<rules>
+- 必须同时包含[题目]和[解答]两个部分
+- 题目难度匹配考研真题，解答包含关键公式推导
+- 禁止输出思考过程、开场白、无关讨论
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
                             try:
-                                quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=1200, temperature=0.2)
+                                quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.2)
                                 if quiz and len(quiz) > 20:
-                                    rendered = _escape_md(_collapse_math(_fix_latex(quiz)))
+                                    rendered = _collapse_math(_fix_latex(quiz))
                                     st.markdown(f"""
-                                    <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #cbd5e1;border-radius:12px;padding:20px 22px;font-size:0.90rem;color:#1e293b;line-height:1.85;max-height:650px;overflow-y:auto;white-space:pre-wrap;">
+                                    <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #cbd5e1;border-radius:12px;padding:20px 22px;font-size:0.90rem;color:#1e293b;line-height:1.85;max-height:650px;overflow-y:auto;">
                                     {rendered}
                                     </div>
                                     """, unsafe_allow_html=True)

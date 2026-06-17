@@ -4292,12 +4292,20 @@ if st.session_state.page == "main":
                         try:
                             quiz_raw = call_llm_api(prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
                             if quiz_raw and len(quiz_raw) > 20:
-                                # === 出题专属后处理：提取并验证 [题目] [解答] 双段 ===
-                                import re as _re
-                                q_match = _re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw, _re.DOTALL)
-                                a_match = _re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw, _re.DOTALL)
-                                q_text = q_match.group(1).strip() if q_match else ""
-                                a_text = a_match.group(1).strip() if a_match else ""
+                                # === 出题后处理：三级降级提取 [题目] [解答] ===
+                                q_text = a_text = ""
+                                # L1: 严格 [题目]/[解答] 标记
+                                qm = re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw, re.DOTALL)
+                                am = re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw, re.DOTALL)
+                                if qm: q_text = qm.group(1).strip()
+                                if am: a_text = am.group(1).strip()
+                                # L2: 纯文本 题目：/解答： 降级
+                                if not q_text:
+                                    qm2 = re.search(r'(?:^|\n)\s*题目[：:]\s*(.+?)(?=\n\s*解答[：:]|\Z)', quiz_raw, re.DOTALL)
+                                    if qm2: q_text = qm2.group(1).strip()
+                                if not a_text:
+                                    am2 = re.search(r'(?:^|\n)\s*解答[：:]\s*(.+?)(?=\Z)', quiz_raw, re.DOTALL)
+                                    if am2: a_text = am2.group(1).strip()
                                 has_q = len(q_text) > 5
                                 has_a = len(a_text) > 5
                                 if has_q and has_a:
@@ -4309,8 +4317,13 @@ if st.session_state.page == "main":
                                     st.warning(f"AI 仅生成了题目，缺少解答。请重试。\n\n**[题目]**\n{q_text[:500]}")
                                 elif not has_q and has_a:
                                     st.warning(f"AI 仅生成了解答，缺少题目。请重试。\n\n**[解答]**\n{a_text[:500]}")
+                                elif len(quiz_raw) > 100:
+                                    # L3: 都没匹配到但内容够长 → 直接展示
+                                    with st.container(border=True):
+                                        st.markdown(_escape_md(_collapse_math(_fix_latex(quiz_raw))))
+                                    _katex_refresh()
                                 else:
-                                    st.warning(f"AI 输出格式异常（未检测到有效[题目]或[解答]）：\n\n{quiz_raw[:500]}")
+                                    st.warning(f"AI 输出内容不足，请重试：\n\n{quiz_raw[:300]}")
                             else:
                                 st.warning("AI 未能生成题目，请重试")
                         except Exception as e:
@@ -4476,10 +4489,17 @@ if st.session_state.page == "main":
                             try:
                                 quiz_raw = call_llm_api(prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
                                 if quiz_raw and len(quiz_raw) > 20:
-                                    q_match = re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw, re.DOTALL)
-                                    a_match = re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw, re.DOTALL)
-                                    q_text = q_match.group(1).strip() if q_match else ""
-                                    a_text = a_match.group(1).strip() if a_match else ""
+                                    q_text = a_text = ""
+                                    qm = re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw, re.DOTALL)
+                                    am = re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw, re.DOTALL)
+                                    if qm: q_text = qm.group(1).strip()
+                                    if am: a_text = am.group(1).strip()
+                                    if not q_text:
+                                        qm2 = re.search(r'(?:^|\n)\s*题目[：:]\s*(.+?)(?=\n\s*解答[：:]|\Z)', quiz_raw, re.DOTALL)
+                                        if qm2: q_text = qm2.group(1).strip()
+                                    if not a_text:
+                                        am2 = re.search(r'(?:^|\n)\s*解答[：:]\s*(.+?)(?=\Z)', quiz_raw, re.DOTALL)
+                                        if am2: a_text = am2.group(1).strip()
                                     has_q = len(q_text) > 5
                                     has_a = len(a_text) > 5
                                     if has_q and has_a:
@@ -4491,8 +4511,12 @@ if st.session_state.page == "main":
                                         st.warning(f"AI 仅生成了题目，缺少解答。请重试。\n\n**[题目]**\n{q_text[:500]}")
                                     elif not has_q and has_a:
                                         st.warning(f"AI 仅生成了解答，缺少题目。请重试。\n\n**[解答]**\n{a_text[:500]}")
+                                    elif len(quiz_raw) > 100:
+                                        with st.container(border=True):
+                                            st.markdown(_escape_md(_collapse_math(_fix_latex(quiz_raw))))
+                                        _katex_refresh()
                                     else:
-                                        st.warning(f"AI 输出格式异常（未检测到有效[题目]或[解答]）：\n\n{quiz_raw[:500]}")
+                                        st.warning(f"AI 输出内容不足，请重试：\n\n{quiz_raw[:300]}")
                                 else:
                                     st.warning("AI 未能生成题目，请重试")
                             except Exception as e:

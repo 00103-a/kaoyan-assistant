@@ -2337,39 +2337,64 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
 
 
 def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
-    """清洗 MiMo 思维链输出：去回显、滤思考行、留正文
-    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content，需要更强力的清洗"""
+    """清洗 MiMo 思维链输出：优先找答案起始标记 → 行过滤 → 编号行兜底
+    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content"""
     if not raw_text or len(raw_text) < 5:
         return raw_text
     text = raw_text.strip()
     # 1. 去掉 prompt 回显
     if prompt and text.startswith(prompt.strip()[:40]):
         text = text[len(prompt.strip()):].strip()
-    # 2. 逐行过滤：删掉明显的思维链行
+
+    # === 核心策略：优先找「答案起始」标记，截取之后的内容 ===
+    _answer_markers = (
+        # 中文答案标记
+        '正式回答', '给出答案', '输出如下', '答案如下', '解答如下',
+        '最终答案', '回答如下', '现在回答', '开始答题',
+        # 结构化标记（来自 prompt 的 format 要求）
+        '[题目]', '[解答]', '[答案]',
+        # 英文
+        'Answer:', 'Solution:', 'Here is',
+    )
+    best_marker_pos = -1
+    for marker in _answer_markers:
+        pos = text.find(marker)
+        if pos != -1 and pos > best_marker_pos:
+            best_marker_pos = pos
+    if best_marker_pos > 0:  # 找到标记，从标记处开始取
+        # 从标记所在行开始
+        line_start = text.rfind('\n', 0, best_marker_pos)
+        text = text[line_start + 1:] if line_start != -1 else text[best_marker_pos:]
+
+    # === 行级过滤 ===
     _think_starts = (
         '好的', '让我', '首先', '根据', '综上', '因此', '注意', '这个', '该知',
         '我们', '需要', '可以', '这里', '现在', '接下来', '最后', '总的', '所以',
         'Okay', 'Let', 'First', 'I need', 'The user',
-        # 新增：MiMo 常见思维链开局
-        '用户', '问题是', '题目', '要解', '已知', '分析', '考虑', '理解',
+        '用户', '问题是', '题目是', '要解', '已知', '分析', '考虑', '理解',
         '回顾', '判断', '比较', '计算', '推导', '综合', '综上所',
         '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
         '首先，', '接下来，', '最后，', '然后，', '接着，',
         '根据题目', '从题目', '由题意', '观察', '对比', '得到',
+        # 更激进的过滤
+        '这道题', '此题', '该题', '本题', '考察', '涉及', '属于',
+        '目的是', '目标是', '任务是', '要求是',
     )
     _think_keywords = (
         '知识点是', '用户要求', '定义如下', '给出答案', '任务是', '需要生成',
         '我的思考', '思路如下', '步骤是', '解题思路', '推理过程',
-        '思考过程', '分析如下', '解答如下', '详细说明', '解释如下',
+        '思考过程', '分析如下', '详细说明', '解释如下',
+        '我来分析', '逐步思考', '逐步分析',
     )
     lines = text.split('\n')
     total_lines = len(lines)
     clean_lines = []
     filtered_reasons = []
-    think_line_count = 0  # 统计思维链行数
+    think_line_count = 0
     for line in lines:
         s = line.strip()
         if not s:
+            clean_lines.append(line)  # 保留空行，维持排版
             continue
         if s.startswith(_think_starts):
             think_line_count += 1
@@ -2382,29 +2407,40 @@ def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
                 filtered_reasons.append(f"keyword: {s[:30]}")
             continue
         clean_lines.append(line)
-    all_filtered = (len(clean_lines) == 0)
-    if not clean_lines:
-        _record_clean_stats(total_lines, total_lines - len(clean_lines), 0,
-                           len(lines), False, True, filtered_reasons)
-        return text  # 全被过滤了，返回原文（让用户至少看到点东西）
-    # 3. 找第一个编号行，从那里开始取
+    all_filtered = (len([l for l in clean_lines if l.strip()]) == 0)
+    if not clean_lines or all_filtered:
+        _record_clean_stats(total_lines, total_lines, 0, len(lines),
+                           False, True, filtered_reasons)
+        return text  # 全被过滤了，返回原文
+
+    # === 找第一个编号行 ===
     start_idx = 0
     for i, line in enumerate(clean_lines):
         if re.match(r'^\d+[\.\、\)\)]\s', line.strip()):
             start_idx = i
             break
     result_lines = clean_lines[start_idx:]
-    # 4. 如果 reasoning_content 回退 + 思维链占比 > 60%，尝试只提取编号行
+
+    # === reasoning 回退时的强力兜底 ===
     think_ratio = think_line_count / max(total_lines, 1)
-    if used_reasoning and think_ratio > 0.6:
-        numbered_only = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
-        if numbered_only:
-            result_lines = numbered_only
-            filtered_reasons.append("reasoning_fallback: 仅提取编号行")
-    # 5. 如果结果还是太长（>15行），只保留前10行
-    was_truncated = len(result_lines) > 15
+    if used_reasoning and think_ratio > 0.4:
+        # 优先提取编号行；没有则取非空行
+        numbered = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
+        if numbered:
+            result_lines = numbered
+            filtered_reasons.append("reasoning_fb: 编号行兜底")
+        else:
+            # 取后 50% 的行（思维链通常在前半部分）
+            non_empty = [l for l in clean_lines if l.strip()]
+            half = max(1, len(non_empty) // 2)
+            result_lines = non_empty[-half:]
+            filtered_reasons.append("reasoning_fb: 后半段兜底")
+
+    # === 截断保护 ===
+    was_truncated = len(result_lines) > 20
     if was_truncated:
-        result_lines = result_lines[:10]
+        result_lines = result_lines[:15]
+
     _record_clean_stats(total_lines, total_lines - len(clean_lines), start_idx,
                        len(result_lines), was_truncated, all_filtered, filtered_reasons,
                        think_ratio=think_ratio, used_reasoning=used_reasoning)
@@ -4254,7 +4290,7 @@ if st.session_state.page == "main":
 （详细解答过程）
 </format>"""
                         try:
-                            quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.2)
+                            quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
                             if quiz and len(quiz) > 20:
                                 with st.container(border=True):
                                     st.markdown(_escape_md(_collapse_math(_fix_latex(quiz))))
@@ -4275,9 +4311,11 @@ if st.session_state.page == "main":
 <rules>
 - 每个问题不超过25字
 - 只输出3行，每行以序号开头
-- 禁止输出分析、解释、开场白
+- 禁止输出分析、解释、开场白、思考过程
+- 直接从问题列表开始输出，不要任何前缀文字
 </rules>
 <format>
+[输出]
 1. 问题一
 2. 问题二
 3. 问题三
@@ -4399,7 +4437,7 @@ if st.session_state.page == "main":
 （详细解答过程）
 </format>"""
                             try:
-                                quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.2)
+                                quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
                                 if quiz and len(quiz) > 20:
                                     with st.container(border=True):
                                         st.markdown(_escape_md(_collapse_math(_fix_latex(quiz))))

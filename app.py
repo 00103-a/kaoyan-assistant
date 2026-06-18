@@ -16,6 +16,7 @@ from datetime import datetime, date, timedelta
 import urllib.request
 import urllib.error
 import re
+import traceback
 import secrets
 import io
 import kaoyan_predict
@@ -538,6 +539,13 @@ st.markdown("""
 
     /* ── Quiz Area ── */
     .quiz-area { max-height: 600px; overflow-y: auto; padding-right: 4px; }
+    /* 信息卡片分类标签 */
+    .info-badge {
+        display: inline-block; background: linear-gradient(135deg, #4f46e5, #6366f1);
+        color: #fff; padding: 2px 12px; border-radius: 20px;
+        font-size: 0.75rem; font-weight: 600; margin-right: 8px;
+        letter-spacing: 0.02em; vertical-align: middle;
+    }
 
     /* ═══════════════════════════════════
        STREAMLIT COMPONENT OVERRIDES
@@ -701,7 +709,7 @@ st.markdown("""
 <link href="https://cdn.bootcdn.net/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.min.css" rel="stylesheet">
 """, unsafe_allow_html=True)
 
-st.components.v1.html("""
+st.html("""
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script>
@@ -731,7 +739,7 @@ st.components.v1.html("""
   new MutationObserver(cleanIcons).observe(document.body,{childList:true,subtree:true});
 })();
 </script>
-""", height=0)
+""")
 
 # ==================== 持久化登录（CookieManager 方案） ====================
 
@@ -2233,13 +2241,243 @@ def get_feynman_history(user_id, limit=10):
            ORDER BY created_at DESC LIMIT ?""",
         (user_id, limit))
 
-def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000):
-    """调用 LLM API"""
+# ========== 调试日志系统 ==========
+def _init_debug_log():
+    """初始化调试日志缓冲区"""
+    if "debug_logs" not in st.session_state:
+        st.session_state.debug_logs = []
+    if "debug_mode" not in st.session_state:
+        st.session_state.debug_mode = False
+
+
+def _append_debug_log(entry):
+    """追加一条调试日志（保留最近 50 条）"""
+    _init_debug_log()
+    st.session_state.debug_logs.append(entry)
+    if len(st.session_state.debug_logs) > 50:
+        st.session_state.debug_logs = st.session_state.debug_logs[-50:]
+
+
+def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
+    """调用 LLM API（非流式）+ 调试日志 + 自动重试"""
+    _init_debug_log()
+    t0 = datetime.now()
+    log_entry = {
+        "time": t0.strftime("%H:%M:%S"),
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "prompt_len": len(prompt),
+        "prompt_preview": prompt[:250],
+    }
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-        "temperature": 0.3
+        "temperature": temperature
+    }
+    last_error = None
+    max_retries = 5
+    for attempt in range(max_retries):
+        if attempt > 0:
+            wait_s = 2 ** attempt  # 2s, 4s, 8s, 16s 指数退避
+            time.sleep(wait_s)
+        try:
+            req = urllib.request.Request(
+                API_BASE + "/chat/completions",
+                data=json.dumps(data).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                raw_body = resp.read().decode("utf-8")
+                msg = json.loads(raw_body)["choices"][0]["message"]
+                c = msg.get("content")
+                # 修复: content 可能是空列表 []（MiMo 思维链特征）
+                raw_full = c if isinstance(c, str) and c != "" else ""
+                used_reasoning = False
+                if not raw_full:
+                    raw_full = msg.get("reasoning_content") or ""
+                    used_reasoning = bool(raw_full)
+                # 记录原始响应信息
+                log_entry["raw_content_len"] = len(c) if isinstance(c, str) else (len(c) if isinstance(c, list) else 0)
+                log_entry["raw_reasoning_len"] = len(msg.get("reasoning_content") or "")
+                log_entry["raw_full_len"] = len(raw_full)
+                log_entry["raw_preview"] = raw_full[:300]
+                log_entry["used_reasoning"] = used_reasoning
+                if attempt > 0:
+                    log_entry["retry_attempt"] = attempt
+                # 清洗
+                cleaned = _clean_mimo_output(raw_full, prompt, used_reasoning=used_reasoning)
+                log_entry["cleaned_len"] = len(cleaned)
+                log_entry["cleaned_preview"] = cleaned[:300]
+                log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
+                log_entry["status"] = "ok"
+                _append_debug_log(log_entry)
+                return cleaned
+        except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                continue
+        except Exception as e:
+            # 非网络错误（如 JSON 解析失败），不重试
+            log_entry["status"] = "error"
+            log_entry["error"] = str(e)
+            log_entry["traceback"] = traceback.format_exc()[-500:]
+            log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
+            _append_debug_log(log_entry)
+            raise
+    # 所有重试均失败
+    log_entry["status"] = "error"
+    log_entry["error"] = str(last_error)
+    log_entry["retries"] = 3
+    log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
+    _append_debug_log(log_entry)
+    raise last_error
+
+
+def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
+    """清洗 MiMo 思维链输出：优先找答案起始标记 → 行过滤 → 编号行兜底
+    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content"""
+    if not raw_text or len(raw_text) < 5:
+        return raw_text
+    text = raw_text.strip()
+    # 1. 去掉 prompt 回显
+    if prompt and text.startswith(prompt.strip()[:40]):
+        text = text[len(prompt.strip()):].strip()
+
+    # === 核心策略：优先找「答案起始」标记，截取之后的内容 ===
+    _answer_markers = (
+        # 中文答案标记
+        '正式回答', '给出答案', '输出如下', '答案如下', '解答如下',
+        '最终答案', '回答如下', '现在回答', '开始答题',
+        # 结构化标记（来自 prompt 的 format 要求）
+        '[题目]', '[解答]', '[答案]',
+        # 英文
+        'Answer:', 'Solution:', 'Here is',
+    )
+    best_marker_pos = len(text) + 1  # 取最早出现的标记（最小位置）
+    for marker in _answer_markers:
+        pos = text.find(marker)
+        if pos != -1 and pos < best_marker_pos:
+            best_marker_pos = pos
+    if best_marker_pos < len(text) and best_marker_pos > 0:
+        # 从标记所在行开始截取
+        line_start = text.rfind('\n', 0, best_marker_pos)
+        text = text[line_start + 1:] if line_start != -1 else text[best_marker_pos:]
+
+    # === 行级过滤 ===
+    _think_starts = (
+        '好的', '让我', '首先', '根据', '综上', '因此', '注意', '这个', '该知',
+        '我们', '需要', '可以', '这里', '现在', '接下来', '最后', '总的', '所以',
+        'Okay', 'Let', 'First', 'I need', 'The user',
+        '用户', '问题是', '题目是', '要解', '已知', '分析', '考虑', '理解',
+        '回顾', '判断', '比较', '计算', '推导', '综合', '综上所',
+        '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
+        '首先，', '接下来，', '最后，', '然后，', '接着，',
+        '根据题目', '从题目', '由题意', '观察', '对比', '得到',
+        # 更激进的过滤
+        '这道题', '此题', '该题', '本题', '考察', '涉及', '属于',
+        '目的是', '目标是', '任务是', '要求是',
+    )
+    _think_keywords = (
+        '知识点是', '用户要求', '定义如下', '给出答案', '任务是', '需要生成',
+        '我的思考', '思路如下', '步骤是', '解题思路', '推理过程',
+        '思考过程', '分析如下', '详细说明', '解释如下',
+        '我来分析', '逐步思考', '逐步分析',
+    )
+    lines = text.split('\n')
+    total_lines = len(lines)
+    clean_lines = []
+    filtered_reasons = []
+    think_line_count = 0
+    for line in lines:
+        s = line.strip()
+        if not s:
+            clean_lines.append(line)  # 保留空行，维持排版
+            continue
+        if s.startswith(_think_starts):
+            think_line_count += 1
+            if len(filtered_reasons) < 10:
+                filtered_reasons.append(f"think_start: {s[:30]}")
+            continue
+        if any(kw in s for kw in _think_keywords):
+            think_line_count += 1
+            if len(filtered_reasons) < 10:
+                filtered_reasons.append(f"keyword: {s[:30]}")
+            continue
+        clean_lines.append(line)
+    all_filtered = (len([l for l in clean_lines if l.strip()]) == 0)
+    if not clean_lines or all_filtered:
+        _record_clean_stats(total_lines, total_lines, 0, len(lines),
+                           False, True, filtered_reasons)
+        return text  # 全被过滤了，返回原文
+
+    # === 找第一个编号行 ===
+    start_idx = 0
+    for i, line in enumerate(clean_lines):
+        if re.match(r'^\d+[\.\、\)\)]\s', line.strip()):
+            start_idx = i
+            break
+    result_lines = clean_lines[start_idx:]
+
+    # === reasoning 回退时的强力兜底 ===
+    think_ratio = think_line_count / max(total_lines, 1)
+    if used_reasoning and think_ratio > 0.4:
+        # 优先提取编号行；没有则取非空行
+        numbered = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
+        if numbered:
+            result_lines = numbered
+            filtered_reasons.append("reasoning_fb: 编号行兜底")
+        else:
+            # 取后 50% 的行（思维链通常在前半部分）
+            non_empty = [l for l in clean_lines if l.strip()]
+            half = max(1, len(non_empty) // 2)
+            result_lines = non_empty[-half:]
+            filtered_reasons.append("reasoning_fb: 后半段兜底")
+
+    # === 截断保护（仅极端情况，正常输出应完整保留）===
+    was_truncated = len(result_lines) > 80
+    if was_truncated:
+        result_lines = result_lines[:60]
+
+    _record_clean_stats(total_lines, total_lines - len(clean_lines), start_idx,
+                       len(result_lines), was_truncated, all_filtered, filtered_reasons,
+                       think_ratio=think_ratio, used_reasoning=used_reasoning)
+    return '\n'.join(result_lines).strip()
+
+
+def _record_clean_stats(total_lines, filtered_count, start_idx, result_count,
+                        was_truncated, all_filtered, filtered_reasons,
+                        think_ratio=0, used_reasoning=False):
+    """记录清洗统计到最近一条调试日志"""
+    logs = st.session_state.get("debug_logs", [])
+    if logs and logs[-1].get("status") in ("ok", None):
+        logs[-1]["clean_stats"] = {
+            "total_lines": total_lines,
+            "filtered_count": filtered_count,
+            "think_ratio": f"{think_ratio:.0%}",
+            "used_reasoning": used_reasoning,
+            "start_idx": start_idx,
+            "result_count": result_count,
+            "was_truncated": was_truncated,
+            "all_filtered": all_filtered,
+            "filtered_reasons": filtered_reasons[:5],
+        }
+
+
+def call_llm_stream(prompt, model="mimo-v2.5", max_tokens=800, system_prompt=""):
+    """流式调用 LLM，返回原始完整文本"""
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+        "stream": True,
     }
     req = urllib.request.Request(
         API_BASE + "/chat/completions",
@@ -2247,9 +2485,34 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000):
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
         method="POST"
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
-        return msg.get("content") or msg.get("reasoning_content") or ""
+    raw_full = ""
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        buffer = ""
+        while True:
+            chunk = resp.read(1024)
+            if not chunk:
+                break
+            buffer += chunk.decode("utf-8", errors="ignore")
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(payload)
+                    delta_obj = obj.get("choices", [{}])[0].get("delta", {})
+                    c = delta_obj.get("content")
+                    delta = c if isinstance(c, str) else ""
+                    if not delta:
+                        delta = delta_obj.get("reasoning_content") or ""
+                    if delta:
+                        raw_full += delta
+                except Exception:
+                    pass
+    return raw_full.strip()
 
 # 费曼学习法评价提示词
 CONCEPT_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心理学专家。你的任务是评价学生对数学概念的理解和表达能力。
@@ -2486,7 +2749,7 @@ def _escape_md(text):
     return text
 
 def _katex_refresh():
-    st.components.v1.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\\\(',right:'\\\\)',display:false}],throwOnError:!1,strict:!1})}</script>", height=0)
+    st.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\\\(',right:'\\\\)',display:false}],throwOnError:!1,strict:!1})}</script>")
 
 def render_qa_cards(raw_text, columns=2, typing=False):
     """渲染练习题：全宽卡片，选项直接显示，答案/解析折叠。typing=True 时逐字打字效果"""
@@ -2628,7 +2891,7 @@ def generate_review_questions(knowledge_points):
         kb_list = "\n".join(kb_lines)
         context_text = "\n\n".join(contexts) if contexts else ""
 
-        system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
+        system_prompt = r"""你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。
@@ -2679,7 +2942,8 @@ EXPLAIN: 解析过程
             result = json.loads(response.read().decode('utf-8'))
             msg = result['choices'][0]['message']
             # MiMo 思维链模型：content 和 reasoning_content 都可能包含答案
-            content = msg.get('content') or ''
+            c = msg.get('content')
+            content = c if isinstance(c, str) else ''
             reasoning = msg.get('reasoning_content') or ''
             raw = content if content and 'Q:' in content else ''
             # 从 reasoning_content 中提取 Q:...--- 格式
@@ -2735,7 +2999,7 @@ def _read_reference_docx_structure():
             lines = []
             for p in doc.paragraphs[:60]:  # 只取前60段看清结构
                 style = p.style.name if p.style else "Normal"
-                text = p.text.strip()
+                text = (p.text or "").strip()
                 if text:
                     lines.append(f"[{style}] {text[:120]}")
             if lines:
@@ -2879,7 +3143,7 @@ def _generate_material(prompt):
         with urllib.request.urlopen(req, timeout=300) as resp:
             msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
         reasoning = msg.get("reasoning_content") or ""
-        content = msg.get("content") or ""
+        content = _extract_content(msg)
         # 如果模型不区分思考/结果，则全部作为结果
         if not content and reasoning:
             content = reasoning
@@ -2893,24 +3157,133 @@ def _ai_output_to_docx_via_pandoc(markdown_text):
     """用 Pandoc 将 Markdown+LaTeX 转为 DOCX（LaTeX 完美渲染）"""
     import tempfile
     import subprocess
-    template = str(Path(__file__).parent / "data" / "reference" / "template.docx")
-    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8") as md:
-        md.write(markdown_text)
-        md_path = md.name
-    docx_path = md_path.replace(".md", ".docx")
-    try:
+
+    def _try_subprocess_pandoc(md_path):
+        """尝试用 shell pandoc 转换"""
+        template = str(Path(__file__).parent / "data" / "reference" / "template.docx")
+        docx_path = md_path.replace(".md", ".docx")
         cmd = ["pandoc", md_path, "-o", docx_path, "--mathml", "--from", "markdown", "--to", "docx"]
         if os.path.exists(template):
             cmd += ["--reference-doc", template]
         subprocess.run(cmd, check=True, capture_output=True)
         with open(docx_path, "rb") as f:
             result = f.read()
+        # cleanup
+        try: os.unlink(docx_path)
+        except Exception: pass
         return result
+
+    def _try_pypandoc(md_path):
+        """用 pypandoc_binary 内置的 pandoc 转换"""
+        import pypandoc
+        docx_path = md_path.replace(".md", ".docx")
+        template = str(Path(__file__).parent / "data" / "reference" / "template.docx")
+        extra_args = ["--mathml", "--from", "markdown", "--to", "docx"]
+        if os.path.exists(template):
+            extra_args += ["--reference-doc", template]
+        pypandoc.convert_file(
+            source_file=md_path, to="docx", format="markdown",
+            outputfile=docx_path, extra_args=extra_args
+        )
+        with open(docx_path, "rb") as f:
+            result = f.read()
+        try: os.unlink(docx_path)
+        except Exception: pass
+        return result
+
+    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8") as md:
+        clean = markdown_text
+        # 去掉所有 Markdown 加粗/粗斜体标记，保留标题层级：
+        # 1. ***粗斜体*** → 内容
+        clean = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', clean, flags=re.DOTALL)
+        # 2. **加粗** → 内容（跨行匹配）
+        clean = re.sub(r'\*\*(.+?)\*\*', r'\1', clean, flags=re.DOTALL)
+        # 3. __加粗__（下划线语法也是粗体）→ 内容
+        clean = re.sub(r'__(.+?)__', r'\1', clean, flags=re.DOTALL)
+        md.write(clean)
+        md_path = md.name
+
+    try:
+        # 方案1: 优先用 pypandoc_binary（自带 pandoc，不依赖 PATH）
+        try:
+            return _try_pypandoc(md_path)
+        except Exception:
+            pass
+        # 方案2: 尝试 shell pandoc
+        try:
+            return _try_subprocess_pandoc(md_path)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+        # 方案3: python-docx 兜底（去掉 LaTeX 标记让公式变纯文本）
+        from docx import Document as DocxDoc
+        import re as _re
+        doc = DocxDoc()
+        # 预处理：把 LaTeX 转成可读的纯文本
+        clean_text = markdown_text
+        clean_text = _re.sub(r'\$\$([^$]+)\$\$', r'\1', clean_text)  # $$...$$ → 内容
+        clean_text = _re.sub(r'\$([^$]+)\$', r'\1', clean_text)      # $...$ → 内容
+        clean_text = _re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', clean_text)  # \frac{a}{b} → (a)/(b)
+        clean_text = _re.sub(r'\\sqrt\{([^}]+)\}', r'√(\1)', clean_text)  # \sqrt{x} → √(x)
+        clean_text = _re.sub(r'\\int_\{([^}]+)\}\^\{([^}]+)\}', r'∫[\1,\2]', clean_text)  # 积分
+        clean_text = _re.sub(r'\\sum_\{([^}]+)\}\^\{([^}]+)\}', r'∑[\1,\2]', clean_text)  # 求和
+        clean_text = _re.sub(r'\\lim_\{([^}]+)\}', r'lim[\1]', clean_text)
+        clean_text = _re.sub(r'\\alpha', 'α', clean_text)
+        clean_text = _re.sub(r'\\beta', 'β', clean_text)
+        clean_text = _re.sub(r'\\theta', 'θ', clean_text)
+        clean_text = _re.sub(r'\\pi', 'π', clean_text)
+        clean_text = _re.sub(r'\\infty', '∞', clean_text)
+        clean_text = _re.sub(r'\\to', '→', clean_text)
+        clean_text = _re.sub(r'\\rightarrow', '→', clean_text)
+        clean_text = _re.sub(r'\\times', '×', clean_text)
+        clean_text = _re.sub(r'\\cdot', '·', clean_text)
+        clean_text = _re.sub(r'\\pm', '±', clean_text)
+        clean_text = _re.sub(r'\\leq', '≤', clean_text)
+        clean_text = _re.sub(r'\\geq', '≥', clean_text)
+        clean_text = _re.sub(r'\\neq', '≠', clean_text)
+        clean_text = _re.sub(r'\\approx', '≈', clean_text)
+        clean_text = _re.sub(r'\\Delta', 'Δ', clean_text)
+        clean_text = _re.sub(r'\\delta', 'δ', clean_text)
+        clean_text = _re.sub(r'\\lambda', 'λ', clean_text)
+        clean_text = _re.sub(r'\\mu', 'μ', clean_text)
+        clean_text = _re.sub(r'\\sigma', 'σ', clean_text)
+        clean_text = _re.sub(r'\\varphi', 'φ', clean_text)
+        clean_text = _re.sub(r'\\partial', '∂', clean_text)
+        clean_text = _re.sub(r'\\nabla', '∇', clean_text)
+        clean_text = _re.sub(r'\\varepsilon', 'ε', clean_text)
+        clean_text = _re.sub(r'\\omega', 'Ω', clean_text)
+        clean_text = _re.sub(r'\\begin\{[^}]*\}', '', clean_text)
+        clean_text = _re.sub(r'\\end\{[^}]*\}', '', clean_text)
+        clean_text = _re.sub(r'\\text\{([^}]*)\}', r'\1', clean_text)
+        clean_text = _re.sub(r'\\mathbf\{([^}]*)\}', r'\1', clean_text)  # 粗体变普通
+        clean_text = _re.sub(r'\\hat\{([^}]*)\}', r'\1̂', clean_text)
+        clean_text = _re.sub(r'\\bar\{([^}]*)\}', r'\1̄', clean_text)
+        clean_text = _re.sub(r'\\vec\{([^}]*)\}', r'\1⃗', clean_text)
+
+        for line in clean_text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                doc.add_paragraph("")
+            elif stripped.startswith("# "):
+                p = doc.add_paragraph(stripped[2:].replace("***", "").replace("**", "").replace("__", ""))
+                p.style = doc.styles["Heading 1"]
+            elif stripped.startswith("## "):
+                p = doc.add_paragraph(stripped[3:].replace("***", "").replace("**", "").replace("__", ""))
+                p.style = doc.styles["Heading 2"]
+            elif stripped.startswith("### "):
+                p = doc.add_paragraph(stripped[4:].replace("***", "").replace("**", "").replace("__", ""))
+                p.style = doc.styles["Heading 3"]
+            elif stripped.startswith("#### "):
+                p = doc.add_paragraph(stripped[5:].replace("***", "").replace("**", "").replace("__", ""))
+                p.style = doc.styles["Heading 4"]
+            else:
+                doc.add_paragraph(stripped.replace("***", "").replace("**", "").replace("__", ""))
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return buf.read()
     finally:
         if os.path.exists(md_path):
             os.unlink(md_path)
-        if os.path.exists(docx_path):
-            os.unlink(docx_path)
 
 
 
@@ -3048,7 +3421,10 @@ def run_pipeline(query, results, model_name, img_data=None):
                         obj = json.loads(payload)
                         delta_obj = obj.get("choices", [{}])[0].get("delta", {})
                         # MiMo 是思维链模型，内容在 reasoning_content 中
-                        delta = delta_obj.get("content") or delta_obj.get("reasoning_content") or ""
+                        c = delta_obj.get("content")
+                        delta = c if isinstance(c, str) else ""
+                        if not delta:
+                            delta = delta_obj.get("reasoning_content") or ""
                         if delta:
                             raw_full += delta
                             yield {"type": "token", "content": delta}
@@ -3066,7 +3442,10 @@ def run_pipeline(query, results, model_name, img_data=None):
             req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
             with urllib.request.urlopen(req, timeout=180) as resp:
                 msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
-                raw_full = msg.get('content') or msg.get('reasoning_content') or ''
+                c = msg.get('content')
+                raw_full = c if isinstance(c, str) else ''
+                if not raw_full:
+                    raw_full = msg.get('reasoning_content') or ''
                 yield {"type": "token", "content": raw_full}
             result = parse_multi_output(raw_full)
             result["_raw_debug"] = raw_full[:500]
@@ -3701,15 +4080,91 @@ if st.session_state.page == "main":
                           key="qa_input", label_visibility="collapsed")
         _ask = st.button("提问", use_container_width=True, type="primary")
 
-        if _ask and _q.strip():
+        if _ask and (_q.strip() or _upload):
             with st.spinner("AI 正在思考..."):
+                user_input = _q.strip()
+                # 处理图片上传：用 MiMo 多模态识别题目文字
+                if _upload and not user_input:
+                    import base64 as _b64
+                    img_bytes = _upload.read()
+                    img_b64 = _b64.b64encode(img_bytes).decode()
+                    ocr_prompt = "请识别这张考研数学题目图片中的文字和公式，直接输出题目原文，不要添加任何解释。如有公式请用 LaTeX 格式。"
+                    ocr_data = {
+                        "model": "mimo-v2.5",
+                        "messages": [{"role": "user", "content": [
+                            {"type": "text", "text": ocr_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                        ]}],
+                        "max_tokens": 500, "temperature": 0.1
+                    }
+                    try:
+                        ocr_req = urllib.request.Request(
+                            API_BASE + "/chat/completions",
+                            data=json.dumps(ocr_data).encode("utf-8"),
+                            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+                            method="POST")
+                        with urllib.request.urlopen(ocr_req, timeout=60) as ocr_resp:
+                            ocr_msg = json.loads(ocr_resp.read().decode("utf-8"))["choices"][0]["message"]
+                        user_input = _extract_content(ocr_msg) or "（图片识别失败，请手动输入问题）"
+                        with st.expander("📷 识别结果"):
+                            st.caption(user_input)
+                    except Exception as e:
+                        st.error(f"图片识别失败: {e}")
+                        user_input = ""
+                elif _upload and user_input:
+                    # 有文本也有图片：附加图片内容到 prompt
+                    import base64 as _b64
+                    img_bytes = _upload.read()
+                    img_b64 = _b64.b64encode(img_bytes).decode()
+                    user_input += "\n[附题目截图]"
+                    # 多模态调用：同时传文本和图片
+                    corpus = load_corpus()
+                    docs = search_corpus(user_input, corpus, top_k=3)
+                    style = st.session_state.get("qa_style", "默认")
+                    style_hint = "" if style == "默认" else f"请用{style}的方式回答。"
+                    prompt = f"""{style_hint}你是考研数学辅导专家。用户上传了一道题目截图，请根据以下参考资料解答。
+
+用户问题: {user_input}
+
+参考资料:
+"""
+                    for i, doc in enumerate(docs):
+                        prompt += f"\n[{i+1}] {doc['id']}: {doc['text'][:800]}\n"
+                    prompt += "\n请给出准确、有深度的回答。如有公式请用 LaTeX 格式。"
+                    mm_data = {
+                        "model": "mimo-v2.5",
+                        "messages": [{"role": "user", "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                        ]}],
+                        "max_tokens": 2000, "temperature": 0.3
+                    }
+                    mm_req = urllib.request.Request(
+                        API_BASE + "/chat/completions",
+                        data=json.dumps(mm_data).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+                        method="POST")
+                    with urllib.request.urlopen(mm_req, timeout=120) as mm_resp:
+                        mm_msg = json.loads(mm_resp.read().decode("utf-8"))["choices"][0]["message"]
+                    answer = _extract_content(mm_msg) or "（AI 回复为空，请重试）"
+                    st.markdown("### 回答")
+                    st.markdown(f'<div class="qa-card">{answer}</div>', unsafe_allow_html=True)
+                    if docs:
+                        ref_html = "".join(f'<span class="ref-tag">{d["id"]}</span>' for d in docs)
+                        st.markdown(f'<div style="margin-top:8px;">{ref_html}</div>', unsafe_allow_html=True)
+                    st.stop()
+
+                if not user_input:
+                    st.warning("请输入问题或上传题目截图")
+                    st.stop()
+
                 corpus = load_corpus()
-                docs = search_corpus(_q.strip(), corpus, top_k=3)
+                docs = search_corpus(user_input, corpus, top_k=3)
                 style = st.session_state.get("qa_style", "默认")
                 style_hint = "" if style == "默认" else f"请用{style}的方式回答。"
                 prompt = f"""{style_hint}你是考研数学辅导专家。请根据以下参考资料回答用户问题。
 
-用户问题: {_q.strip()}
+用户问题: {user_input}
 
 参考资料:
 """
@@ -3774,14 +4229,162 @@ if st.session_state.page == "main":
                         st.session_state[f"show_{doc_id}"] = not st.session_state.get(f"show_{doc_id}", False)
                 with b2:
                     if st.button("出题", key=f"quiz_{doc_id}", use_container_width=True):
-                        prompt = f"请根据以下知识点出一道考研数学题，并给出解答：\n{doc_text[:500]}"
-                        quiz = call_llm_api(prompt, model="mimo-v2.5", max_tokens=600)
-                        st.info(quiz)
+                        prompt = f"""<role>考研数学命题专家</role>
+<task>根据知识点出一道考研数学题，并给出详细解答</task>
+<knowledge>
+{doc_text[:500]}
+</knowledge>
+<rules>
+- 必须同时包含[题目]和[解答]两个部分
+- 题目难度匹配考研真题，解答包含关键公式推导
+- 禁止输出思考过程、开场白、无关讨论
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                        try:
+                            # === 出题自纠重试：最多3次，格式不对让AI重新思考 ===
+                            quiz_out = None
+                            last_raw = ""
+                            for attempt in range(3):
+                                if attempt == 0:
+                                    quiz_raw = call_llm_api(prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
+                                elif attempt == 1:
+                                    correct_prompt = f"""<role>考研数学命题专家</role>
+<task>你上一轮的输出格式不符合要求，请严格纠正后重新输出</task>
+<knowledge>
+{doc_text[:500]}
+</knowledge>
+<bad_example>
+以下是你上一轮的错误输出（格式不符合要求）：
+---
+{last_raw[:400]}
+---
+</bad_example>
+<rules>
+- 必须严格使用 [题目] 和 [解答] 两个标记分栏
+- [题目] 下写题目内容，[解答] 下写详细解答
+- 禁止输出任何思考过程、开场白、解释文字
+- 直接从 [题目] 开始输出
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                                    quiz_raw = call_llm_api(correct_prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
+                                else:
+                                    strict_prompt = f"""<role>考研数学命题专家</role>
+<task>这是最后一次机会。你必须严格遵循格式输出题目和解答。</task>
+<knowledge>
+{doc_text[:500]}
+</knowledge>
+<rules>
+- 第一行必须是 [题目]
+- 题目后必须有 [解答]
+- 禁止任何前缀、后缀、思考文字
+- 禁止输出除题目和解答之外的任何内容
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                                    quiz_raw = call_llm_api(strict_prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.1)
+                                last_raw = quiz_raw or ""
+                                # === 格式提取 ===
+                                q_text = a_text = ""
+                                qm = re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw or "", re.DOTALL)
+                                am = re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw or "", re.DOTALL)
+                                if qm: q_text = qm.group(1).strip()
+                                if am: a_text = am.group(1).strip()
+                                if not q_text:
+                                    qm2 = re.search(r'(?:^|\n)\s*题目[：:]\s*(.+?)(?=\n\s*解答[：:]|\Z)', quiz_raw or "", re.DOTALL)
+                                    if qm2: q_text = qm2.group(1).strip()
+                                if not a_text:
+                                    am2 = re.search(r'(?:^|\n)\s*解答[：:]\s*(.+?)(?=\Z)', quiz_raw or "", re.DOTALL)
+                                    if am2: a_text = am2.group(1).strip()
+                                if len(q_text) > 5 and len(a_text) > 5:
+                                    quiz_out = f"**[题目]**\n\n{q_text}\n\n**[解答]**\n\n{a_text}"
+                                    break
+                            # === 展示结果 ===
+                            if quiz_out:
+                                with st.container(border=True):
+                                    st.markdown(_escape_md(_collapse_math(_fix_latex(quiz_out))))
+                                _katex_refresh()
+                            else:
+                                # 3次全部失败
+                                st.error("AI 3次尝试均未输出符合格式的 [题目] + [解答]，请手动重试。")
+                                if st.session_state.get("debug_mode"):
+                                    st.text_area("最后一次原始输出", last_raw[:1000], height=200)
+                        except Exception as e:
+                            st.error(f"出题请求失败: {e}")
+                            if st.session_state.get("debug_mode"):
+                                st.exception(e)
+                        except Exception as e:
+                            st.error(f"出题请求失败: {e}")
+                            if st.session_state.get("debug_mode"):
+                                st.exception(e)
                 with b3:
                     if st.button("概念自测", key=f"concept_{doc_id}", use_container_width=True):
-                        prompt = f"请对这个知识点进行概念自测提问，帮我检验是否真正理解：\n{doc_text[:500]}"
-                        concept = call_llm_api(prompt, model="mimo-v2.5", max_tokens=400)
-                        st.info(concept)
+                        prompt = f"""<role>考研数学老师</role>
+<task>根据知识点生成3个概念自测问题，检验学生是否真正理解</task>
+<knowledge>
+{doc_text[:350]}
+</knowledge>
+<rules>
+- 每个问题不超过25字
+- 只输出3行，每行以序号开头
+- 禁止输出分析、解释、开场白、思考过程
+- 直接从问题列表开始输出，不要任何前缀文字
+</rules>
+<format>
+[输出]
+1. 问题一
+2. 问题二
+3. 问题三
+</format>"""
+                        try:
+                            concept_raw = call_llm_api(prompt, model="mimo-v2.5", max_tokens=600, temperature=0.2)
+                            # === 概念自测专属后处理：只提取有实质内容的编号行 ===
+                            if concept_raw:
+                                valid_lines = []
+                                for line in concept_raw.split('\n'):
+                                    s = line.strip()
+                                    # 必须: 编号 + 非空白内容（至少5个字符的问题才有意义）
+                                    if re.match(r'^\d+[\.\、\)\)]\s*\S.{3,}', s):
+                                        # 排除思维链伪编号: "1. 首先分析" "2. 然后设计" 等
+                                        if not any(kw in s for kw in (
+                                            '首先', '然后', '接着', '最后', '分析', '设计', '考虑',
+                                            '步骤', '思路', '方案', '策略', '方法', '需要', '应该',
+                                            '了解', '掌握', '理解知识点', '回顾', '思考',
+                                        )):
+                                            valid_lines.append(s)
+                                if valid_lines:
+                                    concept = '\n'.join(valid_lines)
+                                else:
+                                    concept = concept_raw  # 没有有效编号行，保留原文
+                            else:
+                                concept = concept_raw
+                            # === 验证 ===
+                            has_valid = bool(valid_lines)
+                            if concept and has_valid and len(concept) > 10:
+                                with st.container(border=True):
+                                    st.markdown(_escape_md(_collapse_math(_fix_latex(concept))))
+                                _katex_refresh()
+                            elif concept and len(concept) > 10 and not has_valid:
+                                st.warning(f"AI 输出格式异常（未提取到有效问题），可能是思维链残留：\n\n{concept[:500]}")
+                            else:
+                                st.warning("AI 未能生成自测问题，请重试")
+                        except Exception as e:
+                            st.error(f"概念自测请求失败: {e}")
+                            if st.session_state.get("debug_mode"):
+                                st.exception(e)
 
                 # 展开的内容区域（更长）
                 if st.session_state.get(f"show_{doc_id}", False):
@@ -3796,33 +4399,174 @@ if st.session_state.page == "main":
             <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:12px;">遗忘曲线复习候选</div>
             """, unsafe_allow_html=True)
 
-            # Demo review cards following HTML design
-            _review_items = [
-                ("01. 泰勒公式与麦克劳林展开", 45, "泰勒公式用于将函数在某点附近展开为多项式形式。麦克劳林展开是 x=0 处的特例。"),
-                ("06. 矩阵的特征值与特征向量", 62, "特征值与特征向量用于矩阵对角化、二次型标准化。相似对角化条件是考研重点。"),
-                ("12. 拉格朗日中值定理", 38, "拉格朗日中值定理是微分学核心定理之一，连接函数在区间两端的值与区间内某点的导数值。"),
-            ]
-            for name, mem, text in _review_items:
+            # 从数据库读取需要复习的知识点
+            uid = st.session_state.get("user_id")
+            review_items = []
+            if uid:
+                try:
+                    init_memory_db()
+                    conn = sqlite3.connect(MEMORY_DB)
+                    cur = conn.execute(
+                        "SELECT knowledge_id, mastery_level, times_correct, times_wrong, error_type, last_review "
+                        "FROM knowledge_mastery WHERE user_id=? AND mastery_level < 60 AND status != '已掌握' "
+                        "ORDER BY mastery_level ASC, last_review ASC LIMIT 10",
+                        (uid,))
+                    for row in cur.fetchall():
+                        kid, ml, tc, tw, et, lr = row
+                        # 从语料库中查找知识点名称
+                        corpus = load_corpus()
+                        name = kid
+                        desc = ""
+                        for doc in corpus:
+                            if kid in doc.get("id", ""):
+                                name = doc["id"].replace(".md", "").replace("_", " ")
+                                desc = doc.get("text", "")[:200]
+                                break
+                        review_items.append({
+                            "kid": kid, "name": name, "mem": max(10, int(ml or 0)),
+                            "desc": desc or f"正确{tw or 0}次 · 错误{tw or 0}次",
+                            "correct": tw or 0, "wrong": tw or 0
+                        })
+                    conn.close()
+                except Exception:
+                    pass
+
+            if not review_items:
+                # demo fallback
+                review_items = [
+                    {"kid": "001", "name": "泰勒公式与麦克劳林展开", "mem": 45, "desc": "泰勒公式用于将函数在某点附近展开为多项式形式。麦克劳林展开是 x=0 处的特例。", "correct": 3, "wrong": 2},
+                    {"kid": "006", "name": "矩阵的特征值与特征向量", "mem": 62, "desc": "特征值与特征向量用于矩阵对角化、二次型标准化。", "correct": 5, "wrong": 4},
+                    {"kid": "012", "name": "拉格朗日中值定理", "mem": 38, "desc": "拉格朗日中值定理是微分学核心定理之一。", "correct": 2, "wrong": 3},
+                ]
+
+            for item in review_items:
+                mem = item["mem"]
                 _mem_color = "#10b981" if mem >= 60 else ("#f59e0b" if mem >= 40 else "#ef4444")
+                kid = item["kid"]
                 st.markdown(f"""
                 <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:8px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-weight:600;font-size:0.88rem;color:#1e293b;">{name}</span>
+                        <span style="font-weight:600;font-size:0.88rem;color:#1e293b;">{item['name']}</span>
                         <span style="font-size:0.78rem;padding:4px 10px;background:{_mem_color}15;color:{_mem_color};border-radius:20px;font-weight:600;">记忆率 {mem}%</span>
                     </div>
-                    <div style="font-size:0.82rem;color:#64748b;margin-bottom:10px;max-height:120px;overflow-y:auto;">{text}</div>
-                    <div style="display:flex;gap:8px;">
-                        <button style="flex:1;padding:8px;border:1px solid #e2e8f0;background:#fff;border-radius:8px;font-size:0.8rem;cursor:pointer;color:#64748b;transition:all 0.2s;">掌握</button>
-                        <button style="flex:1;padding:8px;border:1px solid #e2e8f0;background:#fff;border-radius:8px;font-size:0.8rem;cursor:pointer;color:#64748b;transition:all 0.2s;">再练</button>
-                        <button style="flex:1;padding:8px;border:1px solid #e2e8f0;background:#fff;border-radius:8px;font-size:0.8rem;cursor:pointer;color:#64748b;transition:all 0.2s;">出题</button>
-                    </div>
+                    <div style="font-size:0.82rem;color:#64748b;margin-bottom:10px;max-height:120px;overflow-y:auto;">{item['desc']}</div>
                 </div>
                 """, unsafe_allow_html=True)
-            st.markdown("""
-            <div style="padding:10px 14px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;font-size:0.82rem;color:#10b981;margin-top:12px;">
-                暂无更多待复习知识点。使用问答后自动添加。
-            </div>
-            """, unsafe_allow_html=True)
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    if st.button("✅ 掌握", key=f"rev_ok_{kid}", use_container_width=True):
+                        st.session_state["mastered_count"] = st.session_state.get("mastered_count", 0) + 1
+                        st.success(f"已标记 {item['name']} 为掌握！")
+                        st.rerun()
+                with b2:
+                    if st.button("🔄 再练", key=f"rev_retry_{kid}", use_container_width=True):
+                        st.info(f"已将 {item['name']} 加入再练列表")
+                with b3:
+                    if st.button("🎲 出题", key=f"rev_quiz_{kid}", use_container_width=True):
+                        corpus = load_corpus()
+                        doc_text = ""
+                        for d in corpus:
+                            if kid in d.get("id", ""):
+                                doc_text = d.get("text", "")[:500]
+                                break
+                        if doc_text:
+                            try:
+                                # === 出题自纠重试：最多3次 ===
+                                quiz_out = None
+                                last_raw = ""
+                                base_prompt = f"""<role>考研数学命题专家</role>
+<task>根据知识点出一道考研数学题，并给出详细解答</task>
+<knowledge>
+{doc_text}
+</knowledge>
+<rules>
+- 必须同时包含[题目]和[解答]两个部分
+- 题目难度匹配考研真题，解答包含关键公式推导
+- 禁止输出思考过程、开场白、无关讨论
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                                for attempt in range(3):
+                                    if attempt == 0:
+                                        quiz_raw = call_llm_api(base_prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
+                                    elif attempt == 1:
+                                        correct_prompt = f"""<role>考研数学命题专家</role>
+<task>你上一轮的输出格式不符合要求，请严格纠正后重新输出</task>
+<knowledge>
+{doc_text}
+</knowledge>
+<bad_example>
+以下是你上一轮的错误输出（格式不符合要求）：
+---
+{last_raw[:400]}
+---
+</bad_example>
+<rules>
+- 必须严格使用 [题目] 和 [解答] 两个标记分栏
+- [题目] 下写题目内容，[解答] 下写详细解答
+- 禁止输出任何思考过程、开场白、解释文字
+- 直接从 [题目] 开始输出
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                                        quiz_raw = call_llm_api(correct_prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.2)
+                                    else:
+                                        strict_prompt = f"""<role>考研数学命题专家</role>
+<task>这是最后一次机会。你必须严格遵循格式输出题目和解答。</task>
+<knowledge>
+{doc_text}
+</knowledge>
+<rules>
+- 第一行必须是 [题目]
+- 题目后必须有 [解答]
+- 禁止任何前缀、后缀、思考文字
+- 禁止输出除题目和解答之外的任何内容
+</rules>
+<format>
+[题目]
+（题目内容）
+[解答]
+（详细解答过程）
+</format>"""
+                                        quiz_raw = call_llm_api(strict_prompt, model="mimo-v2.5", max_tokens=3000, temperature=0.1)
+                                    last_raw = quiz_raw or ""
+                                    q_text = a_text = ""
+                                    qm = re.search(r'\[题目\]\s*\n?(.*?)(?=\[解答\]|$)', quiz_raw or "", re.DOTALL)
+                                    am = re.search(r'\[解答\]\s*\n?(.*?)$', quiz_raw or "", re.DOTALL)
+                                    if qm: q_text = qm.group(1).strip()
+                                    if am: a_text = am.group(1).strip()
+                                    if not q_text:
+                                        qm2 = re.search(r'(?:^|\n)\s*题目[：:]\s*(.+?)(?=\n\s*解答[：:]|\Z)', quiz_raw or "", re.DOTALL)
+                                        if qm2: q_text = qm2.group(1).strip()
+                                    if not a_text:
+                                        am2 = re.search(r'(?:^|\n)\s*解答[：:]\s*(.+?)(?=\Z)', quiz_raw or "", re.DOTALL)
+                                        if am2: a_text = am2.group(1).strip()
+                                    if len(q_text) > 5 and len(a_text) > 5:
+                                        quiz_out = f"**[题目]**\n\n{q_text}\n\n**[解答]**\n\n{a_text}"
+                                        break
+                                if quiz_out:
+                                    with st.container(border=True):
+                                        st.markdown(_escape_md(_collapse_math(_fix_latex(quiz_out))))
+                                    _katex_refresh()
+                                else:
+                                    st.error("AI 3次尝试均未输出符合格式的 [题目] + [解答]，请手动重试。")
+                                    if st.session_state.get("debug_mode"):
+                                        st.text_area("最后一次原始输出", last_raw[:1000], height=200)
+                            except Exception as e:
+                                st.error(f"出题请求失败: {e}")
+                                if st.session_state.get("debug_mode"):
+                                    st.exception(e)
+
+            if not review_items:
+                st.info("暂无待复习知识点。使用问答后系统会自动记录。")
 
         with _tabs[2]:
             st.markdown("""
@@ -3853,7 +4597,40 @@ if st.session_state.page == "main":
             <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:14px;">知识点掌握情况</div>
             """, unsafe_allow_html=True)
             _all = len(load_corpus())
-            _mastered = st.session_state.get("mastered_count", 0)
+            uid = st.session_state.get("user_id")
+            _mastered = 0
+            _cards = []
+            if uid:
+                try:
+                    init_memory_db()
+                    conn = sqlite3.connect(MEMORY_DB)
+                    # 统计已掌握数量
+                    cur = conn.execute("SELECT COUNT(*) FROM knowledge_mastery WHERE user_id=? AND status='已掌握'", (uid,))
+                    _mastered = cur.fetchone()[0]
+                    # 获取最近的知识点状态
+                    cur = conn.execute(
+                        "SELECT knowledge_id, mastery_level, times_correct, times_wrong, status "
+                        "FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC LIMIT 20",
+                        (uid,))
+                    for row in cur.fetchall():
+                        kid, ml, tc, tw, status = row
+                        corpus = load_corpus()
+                        name = kid
+                        for doc in corpus:
+                            if kid in doc.get("id", ""):
+                                name = doc["id"].replace(".md", "").replace("_", " ")
+                                break
+                        _cards.append({
+                            "status": "mastered" if (status == "已掌握" or (ml or 0) >= 80) else "learning",
+                            "name": name,
+                            "correct": tc or 0, "wrong": tw or 0
+                        })
+                    conn.close()
+                except Exception:
+                    pass
+            else:
+                _mastered = st.session_state.get("mastered_count", 0)
+
             _pct = int(_mastered / max(_all, 1) * 100)
             st.markdown(f"""
             <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:6px;">
@@ -3864,25 +4641,35 @@ if st.session_state.page == "main":
             st.progress(_pct / 100)
             st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
 
-            # Memory cards
-            _sample_cards = [
-                ("mastered", "01. 泰勒公式与麦克劳林展开", "✓12 ✗2"),
-                ("mastered", "02. 定积分的几何与物理应用", "✓8 ✗3"),
-                ("learning", "03. 矩阵的特征值与特征向量", "✓5 ✗6"),
-                ("mastered", "04. 闭区间上连续函数的性质", "✓15 ✗1"),
-                ("learning", "05. 多元函数微分学", "✓3 ✗4"),
-                ("learning", "06. 二重积分计算", "✓2 ✗5"),
-            ]
-            for status, name, stats in _sample_cards:
-                _bg = "#f0fdf4" if status == "mastered" else "#fff7ed"
-                _border = "#22c55e" if status == "mastered" else "#f97316"
-                _color = "#166534" if status == "mastered" else "#c2410c"
-                st.markdown(f"""
-                <div style="padding:10px 14px;margin-bottom:4px;border-radius:8px;font-size:0.82rem;font-weight:500;background:{_bg};color:{_color};border-left:3px solid {_border};">
-                    {name} · {stats}
-                </div>
-                """, unsafe_allow_html=True)
-            st.markdown('<div style="text-align:center;padding:12px;font-size:0.75rem;color:#94a3b8;">... 全部 110 个知识点追踪中</div>', unsafe_allow_html=True)
+            if _cards:
+                for item in _cards:
+                    status = item["status"]
+                    _bg = "#f0fdf4" if status == "mastered" else "#fff7ed"
+                    _border = "#22c55e" if status == "mastered" else "#f97316"
+                    _color = "#166534" if status == "mastered" else "#c2410c"
+                    st.markdown(f"""
+                    <div style="padding:10px 14px;margin-bottom:4px;border-radius:8px;font-size:0.82rem;font-weight:500;background:{_bg};color:{_color};border-left:3px solid {_border};">
+                        {item['name']} · ✓{item['correct']} ✗{item['wrong']}
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                # 无数据时显示提示
+                _sample_cards = [
+                    ("mastered", "01. 泰勒公式与麦克劳林展开", "✓12 ✗2"),
+                    ("mastered", "02. 定积分的几何与物理应用", "✓8 ✗3"),
+                    ("learning", "03. 矩阵的特征值与特征向量", "✓5 ✗6"),
+                ]
+                for status, name, stats in _sample_cards:
+                    _bg = "#f0fdf4" if status == "mastered" else "#fff7ed"
+                    _border = "#22c55e" if status == "mastered" else "#f97316"
+                    _color = "#166534" if status == "mastered" else "#c2410c"
+                    st.markdown(f"""
+                    <div style="padding:10px 14px;margin-bottom:4px;border-radius:8px;font-size:0.82rem;font-weight:500;background:{_bg};color:{_color};border-left:3px solid {_border};">
+                        {name} · {stats}
+                    </div>
+                    """, unsafe_allow_html=True)
+                st.caption("👆 以上为示例数据。开始使用问答后，系统会自动追踪你的掌握情况。")
+            st.markdown('<div style="text-align:center;padding:12px;font-size:0.75rem;color:#94a3b8;">使用问答后系统自动追踪 · 共 110 个知识点</div>', unsafe_allow_html=True)
 
     st.stop()
 
@@ -3961,8 +4748,8 @@ if st.session_state.page == "hub":
          "数学问答", "110 个知识点 · 智能问答 · 遗忘曲线复习",
          ["微积分", "线代", "概率"], "main"),
         ("popularity", "icon-fire", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>""",
-         "高校热度", "查院校 · 看数据 · 备考参考",
-         ["报录比", "趋势分析"], "popularity"),
+         "高校热度", "院校专业热度 · 报录比 · 复试线",
+         ["报录比", "趋势分析", "专业查询"], "popularity"),
         ("english", "icon-eng", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>""",
          "英语专家", "作文批改 · 长难句解析 · 翻译 · 单词记忆",
          ["作文", "翻译", "单词"], "english"),
@@ -4084,6 +4871,11 @@ if st.session_state.page == "popularity":
         heat = data["compositeHeat"]
         level = data["heatLevel"]
 
+        # 显示查询的学校和专业
+        _school_name = data.get("_school", "?")
+        _major_name = data.get("_major", "?")
+        st.markdown(f"#### 🎓 {_school_name} · {_major_name}")
+
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
         st.markdown(f"### {level['color']} 综合热度 {heat}/100  ·  {level['label']}")
         st.progress(heat / 100)
@@ -4100,35 +4892,76 @@ if st.session_state.page == "popularity":
         if data.get("admissionHistory"):
             st.markdown("### 录取历史")
             rows = []
+            has_valid = False
             for h in data["admissionHistory"]:
-                rows.append({
-                    "年份": h["year"],
-                    "报考": h["applicants"],
-                    "录取": h["admitted"],
-                    "报录比": f"{h['ratio']}:1",
-                    "复试线": f"{h['cutScore']}分",
-                })
+                row = {
+                    "年份": h.get("year", "?"),
+                    "报考": f"{h.get('applicants', 0)}人",
+                    "录取": f"{h.get('admitted', 0)}人",
+                    "报录比": f"{h.get('ratio', '?')}:1" if h.get("ratio") else "?",
+                    "复试线": f"{h.get('cutScore', '?')}分" if h.get("cutScore") else "?",
+                }
+                if h.get("admitted"):
+                    has_valid = True
+                rows.append(row)
             st.dataframe(rows, use_container_width=True, hide_index=True)
+            if not has_valid:
+                st.caption("📌 录取历史数据来自公开API，部分年份数据不完整。建议结合目标院校官网核实。")
 
         pred = data.get("prediction", {})
         st.markdown("### 🔮 27届预测")
         col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1:
-            st.metric("预计报考", f"{pred.get('estimatedApplicants', 0)}人")
+            val = pred.get('estimatedApplicants', 0) or 0
+            st.metric("预计报考人数", f"{val}人" if val > 0 else "暂无数据")
         with col_p2:
-            st.metric("预计报录比", f"{pred.get('estimatedRatio', '?')}:1")
+            val = pred.get('estimatedRatio', 0) or 0
+            st.metric("预计报录比", f"{val}:1" if val > 0 else "暂无数据")
         with col_p3:
-            st.metric("预计复试线", f"{pred.get('estimatedCutScore', '?')}分")
+            val = pred.get('estimatedCutScore', 0) or 0
+            st.metric("预计复试线", f"{val}分" if val > 0 else "暂无数据")
 
-        if data.get("examSubjects"):
-            with st.expander("考试科目"):
-                for s in data["examSubjects"]:
-                    st.markdown(f"- **{s['code']}** {s['name']}（{s['type']}）")
+        st.caption("预测基于历史录取数据和媒体热度，仅供参考。实际数据以目标院校官网为准。")
 
-        if data.get("platforms"):
-            with st.expander("📱 平台热度详情"):
+        # ── 可点击展开的详情卡片（参考数学Hub知识点展示方案）──
+        st.markdown("---")
+        subjects = data.get("examSubjects", [])
+        platforms = data.get("platforms", [])
+        si = data.get("schoolInfo", {})
+        notes = data.get("notes", [])
+
+        # 卡片1：考试科目
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+            <span class="info-badge">科目</span>
+            <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">考试科目（{len(subjects)}门）</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("展开 / 收起", key="pop_toggle_subjects", use_container_width=True):
+            st.session_state["pop_show_subjects"] = not st.session_state.get("pop_show_subjects", False)
+        if st.session_state.get("pop_show_subjects", False):
+            if subjects:
+                for s in subjects:
+                    st.markdown(f"- **{s.get('code','?')}** {s.get('name','?')}（{s.get('type','?')}）")
+            else:
+                st.caption("暂无考试科目数据，请参考目标院校官网招生简章。")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 卡片2：平台热度
+        plat_ok = sum(1 for p in platforms if p.get("score") is not None)
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+            <span class="info-badge">热度</span>
+            <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">平台热度详情（{plat_ok}/{len(platforms)}平台有数据）</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("展开 / 收起", key="pop_toggle_platforms", use_container_width=True):
+            st.session_state["pop_show_platforms"] = not st.session_state.get("pop_show_platforms", False)
+        if st.session_state.get("pop_show_platforms", False):
+            if platforms:
                 cols = st.columns(2)
-                for i, p in enumerate(data["platforms"]):
+                for i, p in enumerate(platforms):
                     name = p.get("name", "?")
                     score = p.get("score")
                     weight = p.get("weight", 0)
@@ -4139,22 +4972,50 @@ if st.session_state.page == "popularity":
                             bar_char = "▓" * max(1, int(score / 100 * 20))
                             w_pct = f"({int(weight * 100)}%)" if weight else ""
                             st.markdown(f"**{name}** {w_pct}  \n`{bar_char}` {score}/100")
+                if data.get("failedPlatforms"):
+                    st.caption(f"⚠️ 部分平台抓取失败：{', '.join(data['failedPlatforms'])}")
+                st.caption("数据来源：B站、百度、微信、QQ 等公开平台搜索热度")
+            else:
+                st.caption("暂无平台热度数据。")
 
-        if data.get("failedPlatforms"):
-            st.caption(f"⚠️ 部分平台抓取失败：{', '.join(data['failedPlatforms'])}")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        if data.get("schoolInfo"):
-            si = data["schoolInfo"]
-            with st.expander("🏫 院校信息"):
-                st.markdown(f"- **层次**：{si.get('schoolLevel', '未知')}")
-                st.markdown(f"- **院系**：{si.get('department', '未知')}")
-                if si.get("pushRatioDesc"):
-                    st.markdown(f"- **推免**：{si['pushRatioDesc']}")
+        # 卡片3：院校信息
+        level = si.get("schoolLevel", "") or "暂未收录"
+        dept = si.get("department", "") or "暂未收录"
+        push = si.get("pushRatioDesc", "")
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+            <span class="info-badge">院校</span>
+            <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">院校信息</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("展开 / 收起", key="pop_toggle_school", use_container_width=True):
+            st.session_state["pop_show_school"] = not st.session_state.get("pop_show_school", False)
+        if st.session_state.get("pop_show_school", False):
+            st.markdown(f"- **层次**：{level}")
+            st.markdown(f"- **院系**：{dept}")
+            if push:
+                st.markdown(f"- **推免**：{push}")
+            else:
+                st.caption("更详细的院校信息请查阅学校官网。")
 
-        if data.get("notes"):
-            with st.expander("备注"):
-                for n in data["notes"]:
-                    st.markdown(f"- {n}")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 卡片4：备注
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+            <span class="info-badge">备注</span>
+            <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">备注（{len(notes)}条）</span>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("展开 / 收起", key="pop_toggle_notes", use_container_width=True):
+            st.session_state["pop_show_notes"] = not st.session_state.get("pop_show_notes", False)
+        if st.session_state.get("pop_show_notes", False):
+            for n in notes:
+                st.markdown(f"- {n}")
+        else:
+            st.caption("暂无备注信息。")
 
         # ── 个人建议 ──
         st.markdown("---")
@@ -4248,11 +5109,11 @@ if st.session_state.page == "material":
         with gen_col1:
             generate_btn = st.button("🚀 生成资料", type="primary", use_container_width=True, key="mat_gen")
         with gen_col2:
-            if not user_requirement.strip():
+            if not (user_requirement or "").strip():
                 st.caption("💡 在上方输入框中描述你想要的资料类型，然后点击生成")
 
         if generate_btn:
-            if not user_requirement.strip():
+            if not (user_requirement or "").strip():
                 st.warning("请先输入你对资料的需求描述")
             elif not API_KEY:
                 st.error("未配置 AI API Key，无法生成")
@@ -4324,11 +5185,11 @@ if st.session_state.page == "material":
         with eng_col1:
             eng_generate_btn = st.button("🚀 生成资料", type="primary", use_container_width=True, key="eng_gen")
         with eng_col2:
-            if not eng_requirement.strip():
+            if not (eng_requirement or "").strip():
                 st.caption("💡 在上方输入框中描述你想要的资料类型，然后点击生成")
 
         if eng_generate_btn:
-            if not eng_requirement.strip():
+            if not (eng_requirement or "").strip():
                 st.warning("请先输入你对资料的需求描述")
             elif not API_KEY:
                 st.error("未配置 AI API Key，无法生成")
@@ -4381,7 +5242,7 @@ if st.session_state.page == "suggest":
     with st.form("suggest_form"):
         content = st.text_area("你的建议", height=200, placeholder="反馈问题、提出需求、随便聊聊...")
         submitted = st.form_submit_button("提交", use_container_width=True, type="primary")
-        if submitted and content.strip():
+        if submitted and (content or "").strip():
             init_memory_db()
             conn = sqlite3.connect(MEMORY_DB)
             conn.execute("INSERT INTO suggestions (username, content) VALUES (?, ?)",
@@ -4650,7 +5511,7 @@ if st.session_state.page == "english":
                         result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
                     st.markdown("---")
                     st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
-                    st.components.v1.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:!1})}</script>", height=0)
+                    st.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:!1})}</script>")
                     log_visit("英语作文批改", f"{exam_type} {part_type}: {essay_topic or edited_text[:30]}")
                 except Exception as e:
                     st.error(f"批改失败: {e}")

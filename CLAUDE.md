@@ -136,6 +136,12 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
 
 ## 最近改动
 
+- **2026-06-19 同步橘色原版缺失的 Skills**:
+  - 从 `kaoyan-assistant-橘色原版` 复制了 3 个缺失的 skill 到新版 `skills/`:
+    - `latex-formatter` (LaTeX规范) — **关键修复**：新版代码引用此 skill 但文件缺失，导致资料生成 prompt 中 LaTeX 规则从 76 行完整规范降级为 4 行兜底
+    - `feynman-concept` (费曼概念) 和 `feynman-problem` (费曼解题) — 保持两版 skill 目录一致（当前两版均用内联 prompt，skill 文件备用）
+  - 新版 skills 从 6 个恢复到 9 个，与橘色原版对齐
+
 - **2026-06-19 费曼评价清洗误伤修复**:
   - `_clean_mimo_output()` 行级过滤误删评价中的改进建议（如"首先，你需要..."、"这道题的核心是..."、"根据定理..."）
   - 修复：检测到评价格式标记（`[总分]`/`[概念理解]`/`[解题正确性]`等）时跳过行级过滤

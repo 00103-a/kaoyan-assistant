@@ -4371,7 +4371,10 @@ if st.session_state.page == "main":
                         st.session_state[f"show_{doc_id}"] = not st.session_state.get(f"show_{doc_id}", False)
                 with b2:
                     if st.button("出题", key=f"quiz_{doc_id}", use_container_width=True):
+                        _hint = st.empty()
+                        _hint.markdown('<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><div style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:#94a3b8;border-radius:50%;animation:sp06 .6s linear infinite"></div><span style="font-size:.78rem;color:#64748b">AI 正在出题思考中...</span></div><style>@keyframes sp06{to{transform:rotate(360deg)}}</style>', unsafe_allow_html=True)
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": doc_id}])
+                        _hint.empty()
                         st.session_state._kb_qid = doc_id
                         st.rerun()
                 with b3:
@@ -6373,7 +6376,9 @@ with tab1:
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("🎲 出题", key=f"kb_s_{kid}", use_container_width=True):
+                        _bar = st.progress(0, text="AI 正在出题思考中...")
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
+                        _bar.progress(100, text="完成")
                         st.session_state._kb_qid = kid
                         st.rerun()
                 with c2:
@@ -6464,7 +6469,9 @@ with tab1:
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("🎲 出题", key=f"kb_d_{kid}", use_container_width=True):
+                        _bar = st.progress(0, text="AI 正在出题思考中...")
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
+                        _bar.progress(100, text="完成")
                         st.session_state._kb_qid = kid
                         st.rerun()
                 with c2:

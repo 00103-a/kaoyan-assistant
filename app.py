@@ -95,7 +95,7 @@ st.markdown("""
     section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] { display: none; }
     /* Hide Streamlit built-in toolbar & keyboard shortcuts */
     [data-testid="stHeader"] { display: none !important; }
-    [data-testid="stSidebarHeader"] { display: none !important; }
+    @media (min-width: 769px) { [data-testid="stSidebarHeader"] { display: none !important; } }
     button[data-testid="baseButton-headerNoPadding"],
     button[data-testid="baseButton-header"] { display: none !important; }
     /* Prevent sidebar horizontal scroll */
@@ -136,8 +136,12 @@ st.markdown("""
     }
 
     /* ── Sidebar: hide collapse arrow ── */
-    button[data-testid="stSidebarCollapseButton"] { display: none !important; }
-    section[data-testid="stSidebar"] { min-width: 250px !important; }
+    @media (min-width: 769px) {
+      button[data-testid="stSidebarCollapseButton"] { display: none !important; }
+  }
+    @media (min-width: 769px) {
+      section[data-testid="stSidebar"] { min-width: 250px !important; }
+  }
 
     /* ── Sidebar Brand ── */
     .sidebar-brand {
@@ -460,7 +464,7 @@ st.markdown("""
         font-size: 1rem; font-weight: 650; color: #1e293b; margin-bottom: 4px;
         position: relative; z-index: 1;
         letter-spacing: -0.01em; line-height: 1.3;
-    }
+
     .feature-card .card-desc {
         font-size: 0.8rem; color: #64748b; line-height: 1.5; margin-bottom: 10px;
         position: relative; z-index: 1; font-weight: 420;
@@ -693,6 +697,17 @@ st.markdown("""
         div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
         div[data-testid="stHorizontalBlock"] { gap: 0.5rem !important; }
+        section[data-testid="stSidebar"] {
+            min-width: unset !important;
+            width: 100vw !important;
+        }
+        button[data-testid="stSidebarCollapseButton"] {
+            display: flex !important;
+            position: fixed;
+            top: 0.5rem;
+            right: 0.5rem;
+            z-index: 999;
+        }
     }
     @media (max-width: 480px) {
         .main-title { padding: 0.8rem !important; }

@@ -338,6 +338,7 @@ st.markdown("""
     .stMainBlockContainer {
         animation: breatheIn 0.7s cubic-bezier(0.22, 0.61, 0.36, 1) both;
     }
+
     @keyframes breatheIn {
         0%   { opacity: 0; transform: scale(0.97) translateY(6px); filter: blur(4px); }
         30%  { opacity: 0.5; filter: blur(2px); }
@@ -5178,6 +5179,16 @@ if st.session_state.page == "suggest":
 
 # ==================== 英语专家 ====================
 if st.session_state.page == "english":
+    st.markdown("""
+       <style>
+       [data-testid="stIconMaterial"] {
+           display: none !important;
+       }
+       div[data-testid="stExpander"] > div:first-child {
+           justify-content: flex-start !important;
+       }
+       </style>
+       """, unsafe_allow_html=True)
     if st.button("← 返回首页"):
         st.session_state.page = "hub"
         st.rerun()

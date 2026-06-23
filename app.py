@@ -4016,6 +4016,16 @@ if st.session_state.page == "main":
 
         # QA Input
         st.markdown("### 智能回答")
+        st.markdown("""
+               <style>
+               [data-testid="stIconMaterial"] {
+                   display: none !important;
+               }
+               div[data-testid="stExpander"] > div:first-child {
+                   justify-content: flex-start !important;
+               }
+               </style>
+               """, unsafe_allow_html=True)
         _upload = st.file_uploader("上传题目截图（可选）", type=["png","jpg","jpeg"], key="qa_upload")
         _q = st.text_input("输入你的考研问题", placeholder="例如：什么是导数？如何求泰勒展开？",
                           key="qa_input", label_visibility="collapsed")

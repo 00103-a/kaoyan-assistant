@@ -1,4 +1,4 @@
-"""
+﻿"""
 考研学习助手 - Streamlit版
 运行: streamlit run app.py
 """
@@ -465,6 +465,7 @@ st.markdown("""
         font-size: 1rem; font-weight: 650; color: #1e293b; margin-bottom: 4px;
         position: relative; z-index: 1;
         letter-spacing: -0.01em; line-height: 1.3;
+    }
 
     .feature-card .card-desc {
         font-size: 0.8rem; color: #64748b; line-height: 1.5; margin-bottom: 10px;
@@ -720,41 +721,26 @@ st.markdown("""
     }
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-<link href="https://cdn.bootcdn.net/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.min.css" rel="stylesheet">
 """, unsafe_allow_html=True)
 
-st.html("""
+st.components.v1.html("""
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script>
 (function(){
-  function cleanIcons(){
-    var els=document.querySelectorAll('[class*="material-icons"],[class*="material-symbols"],[class*="keyboard_"]');
-    for(var i=0;i<els.length;i++){
-      var el=els[i];
-      el.innerHTML=''; el.textContent='';
-      el.style.fontSize='0'; el.style.width='20px'; el.style.height='20px';
-      el.style.display='inline-block'; el.style.overflow='hidden';
-      el.style.color='transparent'; el.style.userSelect='none';
-    }
-    var walker=document.createTreeWalker(document.body,4,null,false), node;
-    while(node=walker.nextNode()){
-      var v=node.nodeValue;
-      if(!v) continue;
-      var t=v.trim();
-      if(/^(expand_more|expand_less|chevron_right|chevron_left|keyboard_arrow|arrow_|keyboard_double|upload|file_upload|cloud_upload|attach_file|close|check|search|menu|more_vert|more_horiz|delete|edit|add|remove|visibility|visibility_off)/.test(t)){
-        node.nodeValue='';
-      } else if(/_arrow|upload/i.test(v)){
-        node.nodeValue=v.replace(/_arrow[-_]?/g,'').replace(/\bupload\b/gi,'');
-      }
-    }
+  const HIDE = ['expand_more','expand_less','chevron_right','chevron_left','keyboard_arrow_right',
+    'keyboard_arrow_left','keyboard_arrow_down','keyboard_arrow_up','arrow_drop_down','arrow_drop_up',
+    'arrow_right','arrow_left','arrow_down','arrow_up','upload','file_upload','cloud_upload',
+    'attach_file','close','search','menu','more_vert','more_horiz','delete','edit','add','remove'];
+  const RE = new RegExp('^('+HIDE.join('|')+')$');
+  function run(){
+    var w=document.createTreeWalker(document.body,4,null,false), n;
+    while(n=w.nextNode()){ var t=n.nodeValue; if(t&&RE.test(t.trim())) n.nodeValue=''; }
   }
-  cleanIcons();
-  new MutationObserver(cleanIcons).observe(document.body,{childList:true,subtree:true});
+  run(); new MutationObserver(run).observe(document.body,{childList:true,subtree:true});
 })();
 </script>
-""")
+""", height=0)
 
 # ==================== 持久化登录（CookieManager 方案） ====================
 

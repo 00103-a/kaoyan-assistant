@@ -152,6 +152,12 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
   - 修复：检测到评价格式标记（`[总分]`/`[概念理解]`/`[解题正确性]`等）时跳过行级过滤
   - 同时将评价格式标记加入 `_answer_markers`，确保 AI 思考前缀被截断但评价内容完整保留
 
+- **2026-06-22 CSS 断裂修复 — 数学问答 upload 重叠**:
+  - **根因**: `.feature-card .card-title` 规则缺少闭合 `}`（第 467 行后），导致 CSS 解析器在 ~9700 字符处断裂
+  - **影响范围**: 该规则之后所有 CSS 全部被丢弃（92/484 条规则被解析），包括 `stFileUploader` icon 隐藏规则、按钮样式、radio 样式等
+  - **具体表现**: 数学问答 upload 按钮的 icon 文字 "upload" 和 label "Upload" 视觉重叠（`stIconMaterial` 的 `display: flex` 未被覆盖为 `font-size: 0`）
+  - **修复**: 第 468 行补上 `}`
+
 - **2026-06-20 资料生成文档修复**:
   - `_ai_output_to_docx_via_pandoc` 回退橘色原版：纯 pandoc + MathML，删掉三级 fallback 和粗体 strip
   - 模板字体宋体→等线，解决 Word 中文渲染偏黑（WPS/手机端无此问题）

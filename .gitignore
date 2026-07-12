@@ -2,6 +2,7 @@
 data/memory.db
 agent_experience_*.md
 data/user_materials/
+data/config/custom_subjects.json
 
 # 环境变量
 .env
@@ -24,6 +25,11 @@ node_modules/
 # 临时文件
 *.log
 test_*.py
+!tests/test_local_material_source_service.py
+!tests/test_material_pipeline.py
+!tests/test_material_repo.py
+!tests/test_professional_knowledge_ui_flow.py
+!tests/test_repository_flow.py
 temp/
 
 # 部署同步脚本

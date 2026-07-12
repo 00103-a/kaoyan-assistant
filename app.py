@@ -225,6 +225,7 @@ st.markdown("""
 
     /* ── Button Press Animation ── */
     .st-key-nav_hub button:active, .st-key-nav_main button:active,
+    .st-key-nav_professional_kb button:active,
     .st-key-nav_english button:active, .st-key-nav_checkin button:active,
     .st-key-nav_popularity button:active, .st-key-nav_material button:active,
     .st-key-nav_suggest button:active,
@@ -240,6 +241,7 @@ st.markdown("""
     /* ── Colored dots for each nav button ── */
     .st-key-nav_hub button::before,
     .st-key-nav_main button::before,
+    .st-key-nav_professional_kb button::before,
     .st-key-nav_english button::before,
     .st-key-nav_checkin button::before,
     .st-key-nav_popularity button::before,
@@ -253,6 +255,7 @@ st.markdown("""
     }
     .st-key-nav_hub button::before        { background: #4f46e5; box-shadow: 0 0 6px rgba(79,70,229,0.4); }
     .st-key-nav_main button::before       { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
+    .st-key-nav_professional_kb button::before { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
     .st-key-nav_english button::before    { background: #059669; box-shadow: 0 0 6px rgba(5,150,105,0.4); }
     .st-key-nav_checkin button::before    { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,0.4); }
     .st-key-nav_popularity button::before { background: #db2777; box-shadow: 0 0 6px rgba(219,39,119,0.4); }
@@ -268,7 +271,7 @@ st.markdown("""
     }
 
     /* Sidebar buttons — match nav-item font + style */
-    .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_english button,
+    .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_professional_kb button, .st-key-nav_english button,
     .st-key-nav_checkin button, .st-key-nav_popularity button,
     .st-key-nav_material button, .st-key-nav_suggest button,
     .st-key-nav_wrongbook button {
@@ -283,6 +286,7 @@ st.markdown("""
         letter-spacing: 0.02em !important; font-size: 0.88rem !important;
     }
     .st-key-nav_hub button:hover, .st-key-nav_main button:hover,
+    .st-key-nav_professional_kb button:hover,
     .st-key-nav_english button:hover, .st-key-nav_checkin button:hover,
     .st-key-nav_popularity button:hover, .st-key-nav_material button:hover,
     .st-key-nav_suggest button:hover,
@@ -1310,6 +1314,10 @@ def init_memory_db():
     conn.close()
 
 import knowledge_base as kb
+try:
+    from professional_knowledge import render_professional_knowledge_system
+except Exception:
+    render_professional_knowledge_system = None
 
 @st.cache_resource
 def _start_wb_save_server():
@@ -4219,6 +4227,7 @@ with st.sidebar:
     _group1 = [
         ("hub",    "备考看板"),
         ("main",   "数学问答"),
+        ("professional_kb", "专业课识别"),
         ("english","英语专家"),
         ("checkin","打卡督学"),
     ]
@@ -4457,6 +4466,22 @@ if st.session_state.get("_wb_form"):
                 for k in ["_wb_form","_wb_question","_wb_question_image","_wb_correct","_wb_user_answer","_wb_explanation","_wb_subject","_wb_form_fresh","g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
                     st.session_state.pop(k, None)
                 st.rerun()
+# ==================== 专业课识别 ====================
+if st.session_state.page == "professional_kb":
+    if st.button("← 返回首页", key="back_hub_professional_kb"):
+        st.session_state.page = "hub"
+        st.rerun()
+
+    if render_professional_knowledge_system is None:
+        st.error("专业课识别模块加载失败，请检查 professional_knowledge 模块是否存在。")
+        st.stop()
+
+    render_professional_knowledge_system(
+        user_id=st.session_state.get("user_id"),
+        username=st.session_state.get("username"),
+        standalone=False,
+    )
+    st.stop()
 
 # ==================== 数学问答 ====================
 if st.session_state.page == "main":

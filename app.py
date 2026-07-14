@@ -5850,7 +5850,7 @@ if st.session_state.page == "wrongbook":
             st.session_state["__wb_img_bridge__"] = ""
 
     st.text_area("img-bridge", key="__wb_img_bridge__", on_change=_on_img_bridge_change,
-                 label_visibility="collapsed", height=1)
+                 label_visibility="collapsed", height=68)
 
     # ── Action bridge：处理 AI 生成答案 & 保存错题（替代 history.replaceState + 按钮点击）──
     def _on_action_bridge_change():
@@ -6068,7 +6068,7 @@ if st.session_state.page == "wrongbook":
         st.session_state["__wb_action_bridge__"] = ""
 
     st.text_area("action-bridge", key="__wb_action_bridge__", on_change=_on_action_bridge_change,
-                 label_visibility="collapsed", height=1)
+                 label_visibility="collapsed", height=68)
 
     # ── 从 session_state 恢复结果（跨 rerun 持久化）──
     _ai_result = st.session_state.pop("_wb_ai_result", None)

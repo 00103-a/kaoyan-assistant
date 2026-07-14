@@ -1,8 +1,10 @@
 from pathlib import Path
+import re
 
 from schemas.material_schema import MaterialResult
-from services.material_cleaner import clean_material_for_extraction
+from services.material_cleaner import MaterialCleanResult, clean_material_for_extraction
 from services.pdf_text_service import extract_pdf_text, inspect_pdf_for_ocr
+from services.pdf_outline_service import extract_syllabus_outline, looks_like_exam_syllabus
 from services.text_quality import analyze_text_quality, clean_material_text, merge_pdf_risk_into_quality
 
 
@@ -59,6 +61,7 @@ def route_material_input(
     pasted_text=None,
     image_ocr_fn=None,
     pdf_ocr_fn=None,
+    pdf_outline_fn=None,
     pdf_ocr_available=False,
     pdf_text_progress_fn=None,
 ):
@@ -119,6 +122,33 @@ def route_material_input(
             pdf_data.get("pdf_diagnostics"),
         )
         if quality["acceptable"]:
+            if looks_like_exam_syllabus(quality["cleaned_text"]):
+                syllabus_outline, syllabus_report = extract_syllabus_outline(
+                    quality["cleaned_text"],
+                    max_items=400,
+                )
+                if syllabus_outline:
+                    clean_result = MaterialCleanResult(
+                        cleaned_text=syllabus_outline,
+                        original_text_length=len(syllabus_outline),
+                        cleaned_text_length=len(syllabus_outline),
+                        page_markers=len(re.findall(r"===\s*第\s*\d+\s*页\s*===", syllabus_outline)),
+                    )
+                    warnings = list(quality["warnings"]) + [
+                        "检测到考试大纲，已读取完整层级并切换为知识点目录整理模式。",
+                    ]
+                    return _build_material_result(
+                        source_type="pdf",
+                        process_method="pdf_outline_ai",
+                        raw_text=quality["cleaned_text"],
+                        confidence=quality["confidence"],
+                        warnings=warnings + clean_result.warnings,
+                        clean_result=clean_result,
+                        page_count=pdf_data["page_count"],
+                        empty_page_count=pdf_data["empty_page_count"],
+                        pdf_diagnostics=quality.get("pdf_diagnostics"),
+                        ocr_report=syllabus_report,
+                    )
             clean_result = _prepare_extraction_text(quality["cleaned_text"])
             return _build_material_result(
                 source_type="pdf",
@@ -133,6 +163,34 @@ def route_material_input(
             )
 
         warnings = list(quality["warnings"])
+        if pdf_ocr_available and pdf_outline_fn:
+            warnings.append("PDF 直接提取质量较低，已切换为提纲抽样识别")
+            outline_report = {}
+            try:
+                outline_output = pdf_outline_fn(file_path)
+                if isinstance(outline_output, tuple):
+                    raw_outline_text, outline_report = outline_output
+                else:
+                    raw_outline_text = outline_output
+                clean_result = _prepare_extraction_text(raw_outline_text)
+            except Exception as exc:
+                warnings.append(f"提纲抽样识别失败：{exc}")
+                raw_outline_text = ""
+                clean_result = _prepare_extraction_text("")
+            warnings.append("图片型 PDF 仅抽样识别目录/章节提纲；知识点由 AI 发散生成，必须结合教材人工核对。")
+            return _build_material_result(
+                source_type="pdf",
+                process_method="pdf_outline_ai",
+                raw_text=raw_outline_text,
+                confidence=0.6 if clean_result.cleaned_text else 0.0,
+                warnings=warnings + clean_result.warnings,
+                clean_result=clean_result,
+                page_count=pdf_data["page_count"],
+                empty_page_count=pdf_data["empty_page_count"],
+                pdf_diagnostics=quality.get("pdf_diagnostics"),
+                ocr_report=outline_report,
+            )
+
         warnings.append("PDF 直接提取质量较低，尝试 OCR 回退")
         if pdf_ocr_available and pdf_ocr_fn:
             ocr_report = {}

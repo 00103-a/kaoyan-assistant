@@ -35,13 +35,15 @@ from wrongbook_utils import (
     split_wrongbook_answer_explanation,
 )
 
+load_dotenv(Path(__file__).with_name(".env"))
+
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
-API_BASE = "https://api.xiaomimimo.com/v1"
-MODEL_NAME = "mimo-v2.5"
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
+MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有
@@ -51,7 +53,7 @@ MATH3_ONLY = {"107", "110"}
 DATA_DIR = Path("data/corpus")
 DEMO_DATA_DIR = Path("data/corpus_demo")
 REFERENCE_DIR = Path("data/reference")
-MEMORY_DB = "data/memory.db"
+MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
 EXPERIENCE_FILE = "agent_experience.md"
 
 # ==================== CSS样式 ====================
@@ -109,6 +111,23 @@ st.markdown("""
        ═══════════════════════════════════════════ */
     * {
         font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+    }
+    /* Streamlit uses ligature text such as "check" and "close" to render icons.
+       Keep its icon font from being overwritten by the global Chinese font stack. */
+    [data-testid="stIconMaterial"],
+    .material-symbols-rounded {
+        font-family: "Material Symbols Rounded" !important;
+        font-weight: normal !important;
+        font-style: normal !important;
+        line-height: 1 !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        white-space: nowrap !important;
+        word-wrap: normal !important;
+        direction: ltr !important;
+        -webkit-font-feature-settings: "liga" !important;
+        font-feature-settings: "liga" !important;
+        -webkit-font-smoothing: antialiased !important;
     }
     h1, h2, h3, h4, h5, h6 {
         font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif !important;
@@ -4227,7 +4246,7 @@ with st.sidebar:
     _group1 = [
         ("hub",    "备考看板"),
         ("main",   "数学问答"),
-        ("professional_kb", "专业课识别"),
+        ("professional_kb", "专业课"),
         ("english","英语专家"),
         ("checkin","打卡督学"),
     ]
@@ -4466,14 +4485,14 @@ if st.session_state.get("_wb_form"):
                 for k in ["_wb_form","_wb_question","_wb_question_image","_wb_correct","_wb_user_answer","_wb_explanation","_wb_subject","_wb_form_fresh","g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
                     st.session_state.pop(k, None)
                 st.rerun()
-# ==================== 专业课识别 ====================
+# ==================== 专业课 ====================
 if st.session_state.page == "professional_kb":
     if st.button("← 返回首页", key="back_hub_professional_kb"):
         st.session_state.page = "hub"
         st.rerun()
 
     if render_professional_knowledge_system is None:
-        st.error("专业课识别模块加载失败，请检查 professional_knowledge 模块是否存在。")
+        st.error("专业课模块加载失败，请检查 professional_knowledge 模块是否存在。")
         st.stop()
 
     render_professional_knowledge_system(

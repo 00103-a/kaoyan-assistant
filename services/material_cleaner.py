@@ -23,6 +23,8 @@ NOISE_TOKENS = (
 )
 
 INLINE_NOISE_PATTERNS = (
+    re.compile(r"\s*更多计算机考研资料和信息[，,]?\s*请扫码咨询\s*>*", re.IGNORECASE),
+    re.compile(r"\s*王道计算机考研(?:团队)?\s*", re.IGNORECASE),
     re.compile(r"\s*各个学校计算机考研/软件考研真题\s*免费分享\s*https?://\S+", re.IGNORECASE),
     re.compile(r"\s*各个学校计算机考研/软件考研真题\s*免费分享\s*", re.IGNORECASE),
     re.compile(r"\s*免费分享\s*https?://github\.com/csseky/cskaoyan\S*", re.IGNORECASE),
@@ -40,7 +42,7 @@ NOISE_EXACT_LINES = {
 
 PROMOTIONAL_LINE_PATTERNS = (
     re.compile(r"(关注|扫描|扫码).*(公众号|二维码|微信)", re.IGNORECASE),
-    re.compile(r"(免费分享|考研资讯|复试资料|考研经验)", re.IGNORECASE),
+    re.compile(r"(免费分享|扫码咨询|领取资料|考研资讯|复试资料)", re.IGNORECASE),
     re.compile(r"github\.com/csseky/cskaoyan", re.IGNORECASE),
     re.compile(r"微信公众号.{0,20}计算机与软件考研", re.IGNORECASE),
 )

@@ -5,7 +5,12 @@ import unicodedata
 from datetime import datetime
 from typing import Any
 
-from schemas.knowledge_schema import knowledge_point_to_dict, validate_required_fields
+from schemas.knowledge_schema import (
+    has_meaningful_knowledge_content,
+    knowledge_point_to_dict,
+    prepare_knowledge_point_for_storage,
+    validate_required_fields,
+)
 
 
 STRUCTURED_COLUMNS = {
@@ -248,6 +253,15 @@ def save_confirmed_knowledge_points(
                 for index, warnings in invalid[:5]
             )
             raise ValueError(f"存在不完整的确认知识点，已拒绝入库：{details}")
+    prepared_points = []
+    for point in points:
+        prepared, rejection_reason = prepare_knowledge_point_for_storage(
+            point,
+            subject=material_meta.get("subject", ""),
+        )
+        if not rejection_reason and has_meaningful_knowledge_content(prepared):
+            prepared_points.append(prepared)
+    points = prepared_points
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c = conn.cursor()
     saved_count = 0
@@ -327,11 +341,25 @@ def save_confirmed_knowledge_points(
     return saved_count
 
 
-def list_user_knowledge_points(conn, user_id, limit=100):
+def list_user_knowledge_points(conn, user_id, limit=100, subject=None, material_ids=None):
     ensure_knowledge_schema(conn)
     conn.row_factory = None
     c = conn.cursor()
-    c.execute("SELECT * FROM user_knowledge WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit))
+    query = "SELECT * FROM user_knowledge WHERE user_id=?"
+    params: list[Any] = [user_id]
+    if subject:
+        query += " AND subject=?"
+        params.append(subject)
+    if material_ids is not None:
+        normalized_ids = [int(item) for item in material_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_ids)
+        query += f" AND material_id IN ({placeholders})"
+        params.extend(normalized_ids)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    c.execute(query, tuple(params))
     rows = c.fetchall()
     column_names = [desc[0] for desc in c.description]
     return [dict(zip(column_names, row)) for row in rows]

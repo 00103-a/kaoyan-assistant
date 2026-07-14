@@ -1,6 +1,5 @@
 @echo off
 cd /d "%~dp0"
-set "PYTHON=C:\Users\H.D.B\AppData\Local\Python\bin\python.exe"
 set "PORT=8505"
 
 :menu
@@ -44,8 +43,14 @@ if not exist "app.py" (
     pause >nul
     goto menu
 )
+where python >nul 2>&1
+if errorlevel 1 (
+    echo   Python not found. Install Python 3.10 or later and add it to PATH.
+    pause >nul
+    goto menu
+)
 echo   Starting...
-start "" /MIN /D "%~dp0" "%PYTHON%" -m streamlit run app.py --server.port %PORT% --server.headless true --server.fileWatcherType none
+start "" /MIN /D "%~dp0" python -m streamlit run app.py --server.port %PORT% --server.headless true --server.fileWatcherType none
 
 set /a N=0
 :wait

@@ -358,3 +358,79 @@ def list_resumable_materials(
     params.append(max(1, int(limit)))
     cursor = conn.execute(query, tuple(params))
     return [_row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+
+def delete_material_source(conn, user_id: int, material_id: int) -> dict:
+    """Delete one owned source and its derived knowledge without deleting wrong-question history."""
+    ensure_material_schema(conn)
+    cursor = conn.execute(
+        "SELECT id, file_path, filename FROM user_materials WHERE id=? AND user_id=?",
+        (material_id, user_id),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return {"deleted": False, "reason": "not_found"}
+
+    if hasattr(row, "keys"):
+        material = {key: row[key] for key in row.keys()}
+    else:
+        material = dict(zip((item[0] for item in cursor.description), row))
+
+    table_names = {
+        item[0]
+        for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    knowledge_ids: list[int] = []
+    if "user_knowledge" in table_names:
+        knowledge_ids = [
+            item[0]
+            for item in conn.execute(
+                "SELECT id FROM user_knowledge WHERE user_id=? AND material_id=?",
+                (user_id, material_id),
+            ).fetchall()
+        ]
+
+    review_count = 0
+    if knowledge_ids:
+        placeholders = ",".join("?" for _ in knowledge_ids)
+        if "user_wrong_questions" in table_names:
+            conn.execute(
+                f"UPDATE user_wrong_questions SET knowledge_id=NULL "
+                f"WHERE user_id=? AND knowledge_id IN ({placeholders})",
+                (user_id, *knowledge_ids),
+            )
+        if "user_review_records" in table_names:
+            review_count = conn.execute(
+                f"DELETE FROM user_review_records "
+                f"WHERE user_id=? AND knowledge_id IN ({placeholders})",
+                (user_id, *knowledge_ids),
+            ).rowcount
+
+    knowledge_count = 0
+    if "user_knowledge" in table_names:
+        knowledge_count = conn.execute(
+            "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
+            (user_id, material_id),
+        ).rowcount
+    conn.execute(
+        "DELETE FROM user_materials WHERE id=? AND user_id=?",
+        (material_id, user_id),
+    )
+
+    file_path = material.get("file_path") or ""
+    file_still_referenced = bool(
+        file_path
+        and conn.execute(
+            "SELECT 1 FROM user_materials WHERE file_path=? LIMIT 1",
+            (file_path,),
+        ).fetchone()
+    )
+    return {
+        "deleted": True,
+        "material_id": material_id,
+        "filename": material.get("filename") or "",
+        "file_path": file_path,
+        "file_still_referenced": file_still_referenced,
+        "knowledge_deleted": max(knowledge_count, 0),
+        "reviews_deleted": max(review_count, 0),
+    }

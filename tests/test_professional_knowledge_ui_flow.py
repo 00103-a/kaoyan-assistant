@@ -1,10 +1,8 @@
-import json
 import os
 import shutil
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -31,11 +29,13 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
         import knowledge_base
         import professional_knowledge.catalog as catalog
+        import repositories.knowledge_repo as knowledge_repo
         import repositories.wrong_question_repo as wrong_question_repo
         import services.professional_knowledge_task_service as task_service
 
         self.knowledge_base = knowledge_base
         self.catalog = catalog
+        self.knowledge_repo = knowledge_repo
         self.wrong_question_repo = wrong_question_repo
         self.task_service = task_service
         self.original_memory_db = knowledge_base.MEMORY_DB
@@ -71,78 +71,145 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             raise AssertionError(app.exception)
         return app
 
-    def _paste_material(self, app, text=None):
-        _find_by_label(app.text_input, "章节 / 文件主题", occurrence=1).set_value("管理学 - 决策理论")
-        _find_by_label(app.text_area, "粘贴文本").set_value(
-            text
-            or (
-                "题1：决策是管理者识别问题、比较备选方案并作出选择的过程。"
-                "有限理性会受到信息、时间和认知能力约束。"
+    def _seed_knowledge(self, subject, name):
+        with sqlite3.connect(self.db_path) as conn:
+            self.knowledge_repo.ensure_knowledge_schema(conn)
+            self.knowledge_repo.save_confirmed_knowledge_points(
+                conn,
+                user_id=1,
+                points=[
+                    {
+                        "knowledge_name": name,
+                        "core_definition": f"{name}的核心定义。",
+                        "source_text": f"原文依据：{name}",
+                    }
+                ],
+                material_meta={"subject": subject},
+                strict=False,
             )
+            conn.commit()
+
+    @staticmethod
+    def _markdown_contains(app, text):
+        return any(text in str(element.value) for element in app.markdown)
+
+    def test_formal_page_keeps_knowledge_base_and_removes_legacy_tools(self):
+        self._seed_knowledge("408综合", "栈")
+        app = self._run_app()
+
+        self.assertTrue(self._markdown_contains(app, "专业课学习"))
+        self.assertTrue(self._markdown_contains(app, "拖放文件到这里"))
+        self.assertTrue(self._markdown_contains(app, "单个文件最大 200MB"))
+        self.assertTrue(self._markdown_contains(app, "选择文件"))
+        self.assertTrue(self._markdown_contains(app, "408综合知识库"))
+        self.assertTrue(self._markdown_contains(app, "栈"))
+        self.assertFalse(any(item.label == "粘贴文本" for item in app.text_area))
+        self.assertFalse(any(item.label == "确认文本并开始识别" for item in app.button))
+        self.assertFalse(any(item.label == "继续处理这份资料" for item in app.button))
+        self.assertFalse(self._markdown_contains(app, "高级校对与知识库工具"))
+        self.assertFalse(self._markdown_contains(app, "默认全部参与回答"))
+        self.assertFalse(self._markdown_contains(app, "左侧负责筛选"))
+        self.assertFalse(self._markdown_contains(app, "广告与个人履历不会入库"))
+
+    def test_assistant_answer_offers_trimmed_pdf_download(self):
+        app = AppTest.from_file(str(PROJECT_DIR / "app_kb.py"), default_timeout=30)
+        app.session_state["pk_chat_history_1_408综合"] = [
+            {
+                "role": "user",
+                "content": "请根据已选资料梳理完整的知识框架，并标出各部分之间的关系。",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "根据您提供的资料，下面给出完整框架。\n\n"
+                    "## 数据结构\n\n1. 线性表、栈和队列。"
+                ),
+            },
+        ]
+        app.run()
+        if app.exception:
+            raise AssertionError(app.exception)
+
+        self.assertTrue(
+            any(item.label == "导出本回答精简版 PDF" for item in app.get("download_button"))
         )
-        _find_by_label(app.button, "确认文本并开始识别").click().run()
+
+    def test_formal_knowledge_base_follows_selected_subject(self):
+        self._seed_knowledge("408综合", "栈")
+        self._seed_knowledge("医学考研", "肺炎")
+        app = self._run_app()
+        self.assertTrue(self._markdown_contains(app, "408综合知识库"))
+        self.assertTrue(self._markdown_contains(app, "栈"))
+        self.assertFalse(self._markdown_contains(app, "肺炎的核心定义"))
+
+        _find_by_label(app.selectbox, "专业课").set_value("医学考研").run()
         if app.exception:
             raise AssertionError(app.exception)
-        return app
+        self.assertTrue(self._markdown_contains(app, "医学考研知识库"))
+        self.assertTrue(self._markdown_contains(app, "肺炎"))
+        self.assertFalse(self._markdown_contains(app, "栈的核心定义"))
 
-    def test_confirmed_text_survives_restart_and_can_resume(self):
-        app = self._paste_material(self._run_app())
-        _find_by_label(app.button, "保存文本，稍后继续").click().run()
+    def test_selected_knowledge_and_detail_stay_in_sync(self):
+        self._seed_knowledge("408综合", "栈")
+        self._seed_knowledge("408综合", "队列")
+        app = self._run_app()
+        selector = _find_by_label(app.radio, "知识条目列表")
+
+        self.assertTrue(self._markdown_contains(app, "队列的核心定义"))
+        with sqlite3.connect(self.db_path) as conn:
+            target_id = str(
+                conn.execute(
+                    """SELECT id FROM user_knowledge
+                       WHERE subject='408综合' AND knowledge_name='栈'"""
+                ).fetchone()[0]
+            )
+        selector.set_value(target_id).run()
         if app.exception:
             raise AssertionError(app.exception)
 
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            status, confirmed_text = conn.execute(
-                "SELECT processing_status, confirmed_text FROM user_materials"
-            ).fetchone()
-        self.assertEqual(status, "text_confirmed")
-        self.assertIn("有限理性", confirmed_text)
+        self.assertTrue(self._markdown_contains(app, "栈的核心定义"))
+        self.assertFalse(self._markdown_contains(app, "队列的核心定义"))
 
-        restarted = self._run_app()
-        _find_by_label(restarted.button, "继续处理这份资料").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        preview = _find_by_label(restarted.text_area, "清洗后 / 可继续修正")
-        self.assertIn("有限理性", preview.value)
+    def test_repository_option_only_shows_knowledge_name(self):
+        label = self.knowledge_base._format_repo_option(
+            {
+                "knowledge_name": "页式虚拟存储器",
+                "is_ai_expansion": True,
+                "subject": "408",
+                "mastery_state": "待复习",
+            }
+        )
+        self.assertEqual(label, "页式虚拟存储器")
 
-    def test_draft_snapshot_survives_restart(self):
+    def test_current_knowledge_card_hides_source_badges(self):
+        self._seed_knowledge("408综合", "页式虚拟存储器")
+        app = self._run_app()
+        self.assertFalse(self._markdown_contains(app, "原文整理"))
+        self.assertFalse(self._markdown_contains(app, "AI扩展 · 需核对教材"))
+
+    def test_current_knowledge_can_preview_and_save_ai_expansion(self):
+        self._seed_knowledge("408综合", "页式虚拟存储器")
         self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
-            _ for _ in ()
-        ).throw(RuntimeError("offline test"))
-        app = self._paste_material(self._run_app())
-        _find_by_label(app.button, "文本已核对，生成候选知识点").click().run()
+            "## 关联知识点及关系\n\n- TLB：用于加速地址转换。"
+        )
+        app = self._run_app()
+
+        _find_by_label(app.button, "AI 发散当前条目").click().run()
         if app.exception:
             raise AssertionError(app.exception)
+        self.assertTrue(self._markdown_contains(app, "AI 发散预览"))
+        self.assertTrue(self._markdown_contains(app, "TLB：用于加速地址转换"))
 
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            status, snapshot_raw = conn.execute(
-                "SELECT processing_status, workflow_snapshot_json FROM user_materials"
-            ).fetchone()
-        snapshot = json.loads(snapshot_raw)
-        self.assertEqual(status, "drafted")
-        self.assertTrue(snapshot["remaining_drafts"])
-
-        restarted = self._run_app()
-        _find_by_label(restarted.button, "继续处理这份资料").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        pending = _find_by_label(restarted.metric, "待确认")
-        self.assertGreaterEqual(int(pending.value), 1)
-
-        _find_by_label(restarted.button, "确认全部").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        _find_by_label(restarted.button, "保存已确认知识点到私有知识库").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            knowledge_count = conn.execute("SELECT COUNT(*) FROM user_knowledge").fetchone()[0]
-            material_status, material_count = conn.execute(
-                "SELECT processing_status, knowledge_count FROM user_materials"
-            ).fetchone()
-        self.assertGreaterEqual(knowledge_count, 1)
-        self.assertEqual(material_status, "done")
-        self.assertEqual(material_count, knowledge_count)
+        _find_by_label(app.button, "保存发散内容").click().run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        with sqlite3.connect(self.db_path) as conn:
+            saved = conn.execute(
+                "SELECT review_content FROM user_knowledge WHERE knowledge_name=?",
+                ("页式虚拟存储器",),
+            ).fetchone()[0]
+        self.assertIn("TLB：用于加速地址转换", saved)
+        self.assertTrue(self._markdown_contains(app, "已保存的 AI 发散内容"))
 
     def test_custom_subject_wizard_selects_new_subject(self):
         app = self._run_app()
@@ -155,7 +222,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         if app.exception:
             raise AssertionError(app.exception)
 
-        subject_selector = _find_by_label(app.selectbox, "学科", occurrence=0)
+        subject_selector = _find_by_label(app.selectbox, "专业课", occurrence=0)
         self.assertIn("管理学原理", subject_selector.options)
         self.assertEqual(subject_selector.value, "管理学原理")
         self.assertTrue(self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH.exists())
@@ -178,49 +245,6 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         disabled_profile = self.catalog.get_rag_knowledge_base_by_subject("408综合")
         self.assertIsNotNone(disabled_profile)
         self.assertFalse(disabled_profile.enabled)
-
-    def test_partial_save_remains_resumable_with_remaining_draft(self):
-        self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
-            _ for _ in ()
-        ).throw(RuntimeError("offline test"))
-        source_text = (
-            "=== 第1页 ===\n题1：决策是从多个备选方案中作出选择的过程。\n\n"
-            "=== 第2页 ===\n题2：有限理性受到信息、时间和认知能力约束。"
-        )
-        app = self._paste_material(self._run_app(), text=source_text)
-        _find_by_label(app.button, "文本已核对，生成候选知识点").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-        self.assertGreaterEqual(int(_find_by_label(app.metric, "待确认").value), 2)
-
-        _find_by_label(app.button, "确认并加入待保存").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-        _find_by_label(app.button, "保存已确认知识点到私有知识库").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            status = conn.execute("SELECT processing_status FROM user_materials").fetchone()[0]
-            saved_count = conn.execute("SELECT COUNT(*) FROM user_knowledge").fetchone()[0]
-        self.assertEqual(status, "drafted")
-        self.assertEqual(saved_count, 1)
-
-        restarted = self._run_app()
-        _find_by_label(restarted.button, "继续处理这份资料").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        self.assertGreaterEqual(int(_find_by_label(restarted.metric, "待确认").value), 1)
-
-        _find_by_label(restarted.button, "删除当前草稿").click().run()
-        if restarted.exception:
-            raise AssertionError(restarted.exception)
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            final_status = conn.execute(
-                "SELECT processing_status FROM user_materials"
-            ).fetchone()[0]
-        self.assertEqual(final_status, "done")
-
 
 if __name__ == "__main__":
     unittest.main()

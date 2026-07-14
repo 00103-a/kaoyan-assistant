@@ -7,6 +7,13 @@ if not exist "app.py" (
     exit /b 1
 )
 
+where python >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Python not found. Install Python 3.10 or later and add it to PATH.
+    pause
+    exit /b 1
+)
+
 echo.
 echo   ============================================
 echo      Kaoyan Study Assistant
@@ -17,7 +24,7 @@ echo   Starting server, please wait...
 echo   Browser will open automatically once ready
 echo   ============================================
 
-start "" /MIN /D "%~dp0" C:\Users\H.D.B\AppData\Local\Python\bin\python.exe -m streamlit run app.py --server.port 8505 --server.headless true --server.fileWatcherType none
+start "" /MIN /D "%~dp0" python -m streamlit run app.py --server.port 8505 --server.headless true --server.fileWatcherType none
 
 set /a T=0
 :wait

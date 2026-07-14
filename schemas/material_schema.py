@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any, List, Literal
 
 SourceType = Literal["pdf", "image", "pasted_text"]
-ProcessMethod = Literal["pdf_text_extract", "pdf_ocr", "image_ocr", "pasted_text"]
+ProcessMethod = Literal["pdf_text_extract", "pdf_outline_ai", "pdf_ocr", "image_ocr", "pasted_text"]
 
 
 @dataclass
@@ -33,6 +33,7 @@ class MaterialResult:
             values["source_type"] = "pasted_text"
         if values.get("process_method") not in {
             "pdf_text_extract",
+            "pdf_outline_ai",
             "pdf_ocr",
             "image_ocr",
             "pasted_text",

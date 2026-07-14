@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-- **Python** 3.13 (`C:\Users\H.D.B\AppData\Local\Python\bin\python.exe`)
+- **Python** 3.10+（通过系统 `PATH` 调用）
 - **框架**: Streamlit (无前后端分离，纯 `app.py`)
 - **数据库**: SQLite `data/memory.db`（多用户隔离，`user_id` 区分）
 - **API**: 小米 MiMo v2.5，endpoint `https://api.xiaomimimo.com/v1`，模型 `mimo-v2.5`
@@ -24,7 +24,7 @@
 | `recommend.py` | 同事 PR — 学习资料推荐模块 |
 | `kaoyan_predict.py` | 高校热度预测引擎（Node.js 子进程） |
 | `pack.py` | 打包脚本 → `KaoyanRAG-v4.2.zip`（含 corpus/skills/katex/predict） |
-| `copy_to_git.py` | 从 dev 目录同步到 `C:\Users\H.D.B\Desktop\git\`，用于 GitHub 发布 |
+| `copy_to_git.py` | 历史本地同步脚本，不参与当前 GitHub 发布流程 |
 
 ## 关键架构
 
@@ -96,7 +96,7 @@ Feature Cards: SVG 图标 + 玻璃材质 + 呼吸动画 + <a> 整卡可点
 ## API 配置
 
 ```python
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
+API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = "https://api.xiaomimimo.com/v1"
 MODEL = "mimo-v2.5"
 MAX_TOKENS = 1500
@@ -162,7 +162,7 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
   - `_ai_output_to_docx_via_pandoc` 回退橘色原版：纯 pandoc + MathML，删掉三级 fallback 和粗体 strip
   - 模板字体宋体→等线，解决 Word 中文渲染偏黑（WPS/手机端无此问题）
   - 按钮 `🚀 生成资料` → `生成资料`（去 emoji）
-  - 本地安装 Pandoc 3.6.4 (`C:\Users\zy\pandoc\pandoc-3.6.4\`)
+  - 本地使用 Pandoc 3.6.4
   - 英语专家模块对照确认无缺失（仅 emoji 差异）
   - Pandoc 依赖 PATH，启动 Streamlit 需确保 pandoc 在 PATH 中
 
@@ -175,7 +175,7 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
   - 新增 `_record_qa_knowledge()` 函数：问答后自动入库知识点
   - Expander CSS 修复：去掉 `span:first-child` 的 `font-size:0` 
   - 全局 emoji 清理（出题/复习/费曼等标签和按钮）
-  - 橘色原版路径: `C:\Users\zy\kaoyan-assistant-橘色原版\app.py`
+  - 曾与历史橘色版本进行功能对照
 
 ## 当前任务
 
@@ -184,5 +184,5 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
 - **进行中**: 无
 - **待办**: 老板 review PR #7；错题库功能找回；备考看板图标等高问题
 - **上次会话**: 2026-06-20 — 资料生成文档修复完成：回退 pandoc 函数、模板换等线、本地装 pandoc、去 emoji
-- **下次启动提示**: "资料生成已修复，模板字体为等线。Pandoc 3.6.4 已安装在 C:\Users\zy\pandoc\pandoc-3.6.4\，启动 Streamlit 前确保 PATH 包含该目录。待办：错题库、看板图标。"
-- **备份**: `C:\Users\zy\kaoyan-assistant-照搬版本`
+- **下次启动提示**: "资料生成已修复，模板字体为等线。使用文档生成功能前确保 Pandoc 已加入 PATH。待办：错题库、看板图标。"
+- **备份**: 发布前自行创建本地备份

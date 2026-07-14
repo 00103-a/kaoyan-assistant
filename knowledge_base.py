@@ -32,6 +32,7 @@ from repositories.knowledge_repo import (
 )
 from repositories.material_repo import (
     create_material,
+    delete_material_source,
     ensure_material_schema,
     list_resumable_materials,
     mark_material_status,
@@ -41,8 +42,10 @@ from repositories.material_repo import (
 )
 from repositories.wrong_question_repo import count_user_wrong_questions
 from schemas.knowledge_schema import (
+    has_meaningful_knowledge_content,
     knowledge_point_to_dict,
     normalize_knowledge_point_draft,
+    prepare_knowledge_point_for_storage,
     validate_required_fields,
 )
 from schemas.material_schema import MaterialResult
@@ -51,6 +54,7 @@ from services.adaptive_ocr_service import (
     extract_text_adaptively,
     is_rapid_ocr_available,
 )
+from services.pdf_outline_service import extract_pdf_outline_adaptively
 from services.llm_gateway import simple_prompt_completion
 from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
 from services.local_material_source_service import (
@@ -61,6 +65,11 @@ from services.local_material_source_service import (
     read_local_material,
 )
 from services.material_router import route_material_input
+from services.chat_answer_pdf_service import (
+    build_chat_answer_pdf,
+    chat_answer_pdf_filename,
+)
+from services.knowledge_outline_pdf_service import build_knowledge_outline_pdf
 from services.paddle_ocr_service import is_paddle_ocr_available
 from services.professional_knowledge_task_service import (
     create_task as create_professional_task,
@@ -277,16 +286,17 @@ def extract_knowledge_from_text(content, subject, chapter_name):
 
 
 def generate_review_expansion(point):
-    """为单个知识点生成解释、考法、追问和复习卡片。"""
-    prompt = f"""你是考研计算机专业课复习教练。请基于下面这个已确认知识点生成复习内容。
+    """围绕单个知识条目生成可核对、可保存的 AI 发散内容。"""
+    prompt = f"""你是考研专业课复习教练。请围绕下面这个已确认条目进行知识发散。
 
 要求：
 1. 不编造原文没有支持的具体事实。
-2. 如果需要延伸，必须标注“延伸理解”。
-3. 输出 Markdown，包含：核心解释、常见考法、易错提醒、复习卡片、追问。
-4. 复习卡片使用 Q/A 格式，控制在 3 张以内。
+2. 明确区分原条目内容与“AI 延伸”，无法从原文确认的内容必须提示核对教材。
+3. 输出 Markdown，包含：核心解释、关联知识点及关系、常见考法、易错提醒、复习问答。
+4. 关联知识点控制在 3—6 个，说明它们与当前条目的前置、并列、对比或应用关系。
+5. 复习问答使用 Q/A 格式，控制在 3 组以内。
 
-知识点：
+当前条目：
 {json.dumps(point, ensure_ascii=False, indent=2)}
 """
     return _call_llm_api(prompt, model="mimo-v2.5", max_tokens=1600)
@@ -764,12 +774,13 @@ def _render_info_card(title, body, metrics=None, badges=None, kicker=""):
         badge_html = f'<div class="pk-inline-badges">{"".join(badge_nodes)}</div>'
 
     kicker_html = f'<div class="pk-kicker">{_escape_html(kicker)}</div>' if kicker else ""
+    body_html = f"<p>{_escape_html(body)}</p>" if body else ""
     st.markdown(
         (
             '<div class="pk-summary-card">'
             f"{kicker_html}"
             f"<h3>{_escape_html(title)}</h3>"
-            f"<p>{_escape_html(body)}</p>"
+            f"{body_html}"
             f"{metric_html}"
             f"{badge_html}"
             "</div>"
@@ -1074,10 +1085,7 @@ def _ensure_selected_draft(draft_points):
 
 
 def _format_repo_option(point):
-    title = point.get("knowledge_name") or "未命名知识点"
-    subject = point.get("subject") or "未分类"
-    status = point.get("mastery_state") or "待复习"
-    return f"{title} · {subject} · {status}"
+    return point.get("knowledge_name") or "未命名知识点"
 
 
 # ==================== UI 渲染 ====================
@@ -1798,10 +1806,10 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                         st.rerun()
 
 
-def _render_private_repository(user_id):
+def _render_private_repository(user_id, subject=None, show_study_tools=True):
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        points = list_user_knowledge_points(conn, user_id, limit=200)
+        points = list_user_knowledge_points(conn, user_id, limit=200, subject=subject)
     finally:
         conn.close()
 
@@ -1809,7 +1817,7 @@ def _render_private_repository(user_id):
         st.markdown(
             """
             <div class="pk-empty-state">
-                私有知识库为空。请先在“识别资料”中上传或粘贴资料，再到“确认入库”保存知识点。
+                当前专业课的知识库为空。上传资料后，系统会自动整理专业知识、心得、经验和方法策略。
             </div>
             """,
             unsafe_allow_html=True,
@@ -1817,17 +1825,25 @@ def _render_private_repository(user_id):
         return
 
     total_points = len(points)
-    subjects = ["全部"] + sorted({p.get("subject") or "未分类" for p in points})
-    filter_col, search_col, count_col = st.columns([1.1, 2.2, 0.75])
-    with filter_col:
-        selected = st.selectbox("筛选学科", subjects, key="repo_subject_filter")
-    if selected != "全部":
-        points = [p for p in points if (p.get("subject") or "未分类") == selected]
+    total_outline_points = sum(
+        (point.get("knowledge_type") or "") in {"大纲知识点", "章节提纲"}
+        for point in points
+    )
+    selected = subject or "全部"
+    if subject:
+        search_col, count_col = st.columns([3.2, 0.8])
+    else:
+        subjects = ["全部"] + sorted({p.get("subject") or "未分类" for p in points})
+        filter_col, search_col, count_col = st.columns([1.1, 2.2, 0.75])
+        with filter_col:
+            selected = st.selectbox("筛选学科", subjects, key="repo_subject_filter")
+        if selected != "全部":
+            points = [p for p in points if (p.get("subject") or "未分类") == selected]
 
     with search_col:
         search_query = st.text_input(
-            "搜索知识点",
-            placeholder="输入知识点、关键词、原文依据或复习内容",
+            "搜索知识条目",
+            placeholder="输入专业知识、心得、经验、方法或原文依据",
             key="repo_search_query",
         ).strip()
     if search_query:
@@ -1836,15 +1852,11 @@ def _render_private_repository(user_id):
     with count_col:
         st.metric("显示", len(points), delta=f"共 {total_points}", delta_color="off")
 
-    st.markdown(
-        '<div class="pk-toolbar-note">筛选和搜索会同时作用于当前私有知识库，复习内容生成后会保留在对应知识点内。</div>',
-        unsafe_allow_html=True,
-    )
     if not points:
         st.markdown(
             """
             <div class="pk-empty-state">
-                没有找到匹配的知识点。可以换一个关键词，或回到“识别资料”继续入库。
+                没有找到匹配的知识条目，可以换一个关键词。
             </div>
             """,
             unsafe_allow_html=True,
@@ -1853,30 +1865,28 @@ def _render_private_repository(user_id):
 
     point_map = {str(point.get("id")): point for point in points if point.get("id") is not None}
     point_ids = list(point_map.keys())
-    selected_id = st.session_state.get("repo_selected_id")
-    if selected_id not in point_map:
-        selected_id = point_ids[0]
-        st.session_state["repo_selected_id"] = selected_id
+    selected_key = f"repo_selected_id_{user_id}_{subject or selected}"
+    if st.session_state.get(selected_key) not in point_map:
+        st.session_state.pop(selected_key, None)
 
     left_col, right_col = st.columns([1, 1.4])
     with left_col:
         _render_info_card(
-            "知识点列表",
-            "左侧负责筛选和切换当前知识点，右侧展示原文依据、状态和复习内容。",
+            "知识条目列表",
+            "",
             metrics=[
                 ("当前显示", len(points)),
-                ("总知识点", total_points),
+                ("总条目", total_points),
+                ("大纲知识点", total_outline_points),
                 ("学科过滤", selected),
-                ("搜索词", search_query or "无"),
             ],
             kicker="知识工作台",
         )
         selected_id = st.radio(
-            "知识点列表",
+            "知识条目列表",
             options=point_ids,
-            index=point_ids.index(selected_id),
             format_func=lambda point_id: _format_repo_option(point_map[point_id]),
-            key="repo_selected_id",
+            key=selected_key,
             label_visibility="collapsed",
         )
 
@@ -1885,19 +1895,25 @@ def _render_private_repository(user_id):
         title = point.get("knowledge_name") or "未命名知识点"
         _render_info_card(
             title,
-            point.get("core_definition") or point.get("content") or "暂无内容",
+            (
+                ""
+                if (point.get("knowledge_type") or "") == "大纲知识点"
+                else point.get("core_definition") or point.get("content") or "暂无内容"
+            ),
             metrics=[
                 ("学科", point.get("subject") or "未分类"),
                 ("章节", point.get("chapter_name") or "未标注"),
                 ("页码", point.get("source_page") or "未知"),
                 ("状态", point.get("mastery_state") or "待复习"),
             ],
-            badges=[
-                (point.get("knowledge_type") or "知识点", ""),
-                (point.get("source_location") or "未标注位置", ""),
-            ],
-            kicker="当前知识点",
+            kicker="当前条目",
         )
+
+        if point.get("is_ai_expansion") and point.get("uncertainty_note"):
+            st.caption(point.get("uncertainty_note"))
+
+        if show_study_tools:
+            _render_repository_ai_tools(point)
 
         if point.get("source_text"):
             st.text_area(
@@ -1908,43 +1924,27 @@ def _render_private_repository(user_id):
                 disabled=True,
             )
 
-        c1, c2, c3 = st.columns(3)
-        stored_expansion = point.get("review_content") or st.session_state.get(f"expansion_{point.get('id')}")
-        generate_label = "重新生成复习内容" if stored_expansion else "生成复习内容"
-        with c1:
-            if st.button("标记学习中", key=f"learning_{point.get('id')}", use_container_width=True):
-                _update_knowledge_mastery(point.get("id"), "学习中")
-                st.rerun()
-        with c2:
-            if st.button("标记已掌握", key=f"mastered_{point.get('id')}", use_container_width=True):
-                _update_knowledge_mastery(point.get("id"), "已掌握")
-                st.rerun()
-        with c3:
-            if st.button(generate_label, key=f"expand_{point.get('id')}", use_container_width=True):
-                with st.spinner("正在生成复习内容..."):
-                    try:
-                        expansion = generate_review_expansion(point)
-                        _save_review_expansion(point.get("id"), expansion)
-                        st.session_state[f"expansion_{point.get('id')}"] = expansion
-                        st.success("复习内容已保存")
-                    except Exception as exc:
-                        st.session_state[f"expansion_{point.get('id')}"] = f"生成失败：{exc}"
 
-        expansion = point.get("review_content") or st.session_state.get(f"expansion_{point.get('id')}")
-        if expansion:
-            st.markdown("**AI 复习内容**")
-            if point.get("review_generated_at"):
-                st.caption(f"生成时间：{point.get('review_generated_at')}")
-            st.markdown(expansion)
-        else:
-            st.markdown(
-                """
-                <div class="pk-empty-state">
-                    这条知识点还没有复习内容。确认原文依据无误后，可以在上方生成复习扩展。
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+def _load_outline_export_points(user_id, subject, material_ids):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        return list_user_knowledge_points(
+            conn,
+            user_id,
+            limit=500,
+            subject=subject,
+            material_ids=material_ids,
+        )
+    finally:
+        conn.close()
+
+
+def _safe_outline_pdf_filename(subject):
+    safe_subject = "".join(
+        char for char in str(subject or "专业课")
+        if char not in '<>:"/\\|?*' and ord(char) >= 32
+    ).strip(" .")
+    return f"{safe_subject or '专业课'}-背诵提纲.pdf"
 
 
 def _filter_repository_points(points, query):
@@ -2202,6 +2202,10 @@ def _process_material_submission(
                 pasted_text=pasted_text,
                 image_ocr_fn=extract_text_from_image,
                 pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(
+                    path,
+                    progress_callback=update_ocr_progress,
+                ),
+                pdf_outline_fn=lambda path: extract_pdf_outline_adaptively(
                     path,
                     progress_callback=update_ocr_progress,
                 ),
@@ -2880,18 +2884,79 @@ def _inject_professional_workbench_styles():
     st.markdown(
         """
         <style>
-        .pk-workbench-title { margin: .1rem 0 .9rem; }
-        .pk-workbench-title h1 { margin: 0; color: #16181d; font-size: 1.75rem; letter-spacing: -.03em; }
-        .pk-workbench-title p { margin: .28rem 0 0; color: #667085; font-size: .9rem; }
+        .pk-learning-banner {
+            margin: .1rem 0 1.05rem;
+            padding: 1.35rem 1.8rem;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 44%, #3b82f6 100%);
+            border: 1px solid rgba(255,255,255,.18);
+            box-shadow: 0 8px 32px rgba(29,78,216,.20), inset 0 1px 0 rgba(255,255,255,.15);
+            color: #fff;
+            position: relative;
+            overflow: hidden;
+        }
+        .pk-learning-banner::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(120deg, transparent 24%, rgba(255,255,255,.10) 48%, transparent 72%);
+            pointer-events: none;
+        }
+        .pk-learning-banner-inner { display: flex; align-items: center; gap: 14px; position: relative; z-index: 1; }
+        .pk-learning-banner-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(55,48,163,.32);
+        }
+        .pk-learning-banner h1 { margin: 0 !important; color: #fff !important; font-size: 1.48rem !important; letter-spacing: -.02em; }
+        .pk-learning-banner p { margin: .25rem 0 0; color: rgba(255,255,255,.82) !important; font-size: .84rem; }
         .pk-workbench-label { color: #101828; font-size: .9rem; font-weight: 700; margin-bottom: .35rem; }
-        .pk-source-intro { padding: .9rem 1rem; border: 1px solid #dbe3ef; border-radius: 16px; background: #f8fbff; margin-bottom: .75rem; }
-        .pk-source-intro strong { display: block; color: #172033; font-size: .92rem; }
-        .pk-source-intro span { display: block; margin-top: .25rem; color: #667085; font-size: .78rem; line-height: 1.5; }
-        .pk-chat-hero { min-height: 210px; display: flex; flex-direction: column; justify-content: center; padding: 1.35rem 1.55rem; border: 1px solid #e2e7ef; border-radius: 18px; background: #fff; }
+        .pk-source-heading { color: #172033; font-size: .92rem; font-weight: 700; margin: .15rem 0 .65rem; }
+        .pk-chat-hero { min-height: 142px; display: flex; flex-direction: column; justify-content: center; padding: 1.35rem 1.55rem; border: 1px solid #e2e7ef; border-radius: 18px; background: #fff; }
         .pk-chat-hero .pk-book-mark { color: #6857a6; font-size: .78rem; font-weight: 700; margin-bottom: .65rem; }
         .pk-chat-hero h2 { margin: 0; color: #17191f; font-size: 1.58rem; letter-spacing: -.025em; }
         .pk-chat-hero p { margin: .58rem 0 0; color: #344054; line-height: 1.75; font-size: .91rem; max-width: 760px; }
         .pk-source-count { color: #667085; font-size: .78rem; margin: .2rem 0 .7rem; }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] span {
+            font-size: 0 !important;
+        }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] span::after {
+            content: "拖放文件到这里";
+            font-size: .9rem !important;
+            color: #172033;
+        }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] small {
+            font-size: 0 !important;
+        }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] small::after {
+            content: "单个文件最大 200MB · PDF, PNG, JPG, JPEG, TXT, MD";
+            font-size: .75rem !important;
+            color: #667085;
+        }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzone"] button {
+            font-size: 0 !important;
+        }
+        .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzone"] button::after {
+            content: "选择文件";
+            font-size: .86rem !important;
+        }
+        .st-key-download_knowledge_outline_pdf button {
+            background: #4338ca !important;
+            border-color: #4338ca !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+        }
+        .st-key-download_knowledge_outline_pdf button:hover {
+            background: #3730a3 !important;
+            border-color: #3730a3 !important;
+        }
         div[data-testid="stVerticalBlockBorderWrapper"] { border-color: #e2e7ef; border-radius: 18px; box-shadow: none; }
         div[data-testid="stChatMessage"] { border: 1px solid #e8ecf2; background: #fff; border-radius: 14px; padding: .15rem .35rem; }
         button[kind="primary"], button[kind="primaryFormSubmit"] { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; }
@@ -2899,7 +2964,8 @@ def _inject_professional_workbench_styles():
         input[type="checkbox"] { accent-color: #4f46e5; }
         @media (max-width: 900px) {
             .pk-chat-hero { min-height: auto; }
-            .pk-workbench-title h1 { font-size: 1.45rem; }
+            .pk-learning-banner { padding: 1.1rem 1.2rem; border-radius: 16px; }
+            .pk-learning-banner h1 { font-size: 1.3rem !important; }
         }
         </style>
         """,
@@ -2913,8 +2979,9 @@ def _list_subject_sources(user_id, subject):
     try:
         ensure_material_schema(conn)
         rows = conn.execute(
-            """SELECT id, filename, chapter_name, processing_status, knowledge_count,
+            """SELECT id, subject, filename, chapter_name, processing_status, knowledge_count,
                       source_type, process_method, extracted_text, confirmed_text,
+                      file_path, file_type,
                       created_at, updated_at
                FROM user_materials
                WHERE user_id=? AND subject=?
@@ -2926,7 +2993,83 @@ def _list_subject_sources(user_id, subject):
         conn.close()
 
 
-def _auto_index_material(user_id, result):
+def _render_repository_ai_tools(point):
+    """Render visible per-item AI expansion controls with preview-before-save."""
+    knowledge_id = point.get("id")
+    draft_key = f"expansion_draft_{knowledge_id}"
+    stored_expansion = point.get("review_content") or ""
+
+    ai_col, learning_col, mastered_col = st.columns([1.6, 1, 1])
+    with ai_col:
+        generate_label = "重新 AI 发散" if stored_expansion else "AI 发散当前条目"
+        if st.button(
+            generate_label,
+            key=f"expand_{knowledge_id}",
+            use_container_width=True,
+            type="primary",
+        ):
+            with st.spinner("正在发散当前条目..."):
+                try:
+                    st.session_state[draft_key] = generate_review_expansion(point)
+                except Exception as exc:
+                    st.error(f"AI 发散失败：{exc}")
+    with learning_col:
+        if st.button("标记学习中", key=f"learning_{knowledge_id}", use_container_width=True):
+            _update_knowledge_mastery(knowledge_id, "学习中")
+            st.rerun()
+    with mastered_col:
+        if st.button("标记已掌握", key=f"mastered_{knowledge_id}", use_container_width=True):
+            _update_knowledge_mastery(knowledge_id, "已掌握")
+            st.rerun()
+
+    draft_expansion = st.session_state.get(draft_key)
+    if draft_expansion:
+        st.markdown("**AI 发散预览**")
+        st.markdown(draft_expansion)
+        save_col, discard_col = st.columns(2)
+        with save_col:
+            if st.button(
+                "保存发散内容",
+                key=f"save_expansion_{knowledge_id}",
+                use_container_width=True,
+                type="primary",
+            ):
+                _save_review_expansion(knowledge_id, draft_expansion)
+                st.session_state.pop(draft_key, None)
+                st.rerun()
+        with discard_col:
+            if st.button(
+                "放弃本次结果",
+                key=f"discard_expansion_{knowledge_id}",
+                use_container_width=True,
+            ):
+                st.session_state.pop(draft_key, None)
+                st.rerun()
+    elif stored_expansion:
+        st.markdown("**已保存的 AI 发散内容**")
+        if point.get("review_generated_at"):
+            st.caption(f"生成时间：{point.get('review_generated_at')}")
+        st.markdown(stored_expansion)
+
+
+def _delete_subject_source(user_id, material_id):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        result = delete_material_source(conn, user_id, material_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if result.get("deleted") and not result.get("file_still_referenced"):
+        _remove_local_material_file(result.get("file_path"))
+    if result.get("deleted") and st.session_state.get("_ocr_material_id") == material_id:
+        _clear_active_material_state(discard_unsaved=False)
+    return result
+
+
+def _auto_index_material(user_id, result, *, replace_existing=False):
     material_result = result.get("material_result")
     material_id = result.get("material_id")
     if not material_result or not material_id:
@@ -2940,22 +3083,57 @@ def _auto_index_material(user_id, result):
     chapter_name = result.get("chapter_name", "")
     profile = get_rag_knowledge_base_by_subject(subject)
 
+    is_syllabus_outline = (
+        material_result.process_method == "pdf_outline_ai"
+        and (material_result.ocr_report or {}).get("mode") == "syllabus_outline"
+    )
+    outline_items = int((material_result.ocr_report or {}).get("outline_items") or 0)
+    configured_max_points = profile.max_points if profile else 12
+    max_points = configured_max_points
+    if is_syllabus_outline:
+        max_points = min(48, max(configured_max_points, max(24, round(outline_items / 4))))
+
     def llm_callable(prompt):
         if not os.environ.get("AI_API_KEY", "").strip():
             raise RuntimeError("未配置 AI_API_KEY，使用本地规则整理")
-        return _call_llm_api(prompt, max_tokens=2600)
+        return _call_llm_api(prompt, max_tokens=6400 if is_syllabus_outline else 2600)
 
     drafts, warnings = extract_knowledge_points_as_drafts(
         text=text,
         subject=subject,
         chapter_name=chapter_name,
-        max_points=profile.max_points if profile else 12,
+        max_points=max_points,
         llm_callable=llm_callable,
         extraction_guidance=profile.extraction_guidance if profile else "",
+        outline_mode=material_result.process_method == "pdf_outline_ai",
     )
-    point_dicts = [knowledge_point_to_dict(point) for point in drafts]
+    if is_syllabus_outline:
+        warnings.insert(
+            0,
+            f"考试大纲共识别 {outline_items} 个层级条目，本次最多整理 {max_points} 个具体知识点。",
+        )
+    all_point_dicts = [knowledge_point_to_dict(point) for point in drafts]
+    point_dicts = []
+    rejection_reasons = []
+    for point in all_point_dicts:
+        prepared, rejection_reason = prepare_knowledge_point_for_storage(point, subject=subject)
+        if rejection_reason:
+            rejection_reasons.append(rejection_reason)
+            continue
+        if has_meaningful_knowledge_content(prepared):
+            point_dicts.append(prepared)
+    if rejection_reasons:
+        reason_summary = "、".join(dict.fromkeys(rejection_reasons))
+        warnings.append(
+            f"已跳过 {len(rejection_reasons)} 条无关或无效内容，未写入知识库：{reason_summary}。"
+        )
     conn = sqlite3.connect(MEMORY_DB)
     try:
+        if replace_existing and point_dicts:
+            conn.execute(
+                "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
+                (user_id, material_id),
+            )
         save_confirmed_text(conn, material_id, text, status="text_confirmed")
         saved_count = save_confirmed_knowledge_points(
             conn,
@@ -2982,6 +3160,61 @@ def _auto_index_material(user_id, result):
         conn.commit()
     finally:
         conn.close()
+    return saved_count, warnings
+
+
+def _reprocess_subject_source(user_id, source):
+    file_path = source.get("file_path") or ""
+    if not _is_local_user_material_path(file_path):
+        raise ValueError("原始文件不在用户资料目录中，无法重新整理。")
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError("原始文件已不存在，请重新上传。")
+
+    suffix = path.suffix.lower()
+    file_bytes = path.read_bytes() if suffix != ".pdf" else None
+    material_result = route_material_input(
+        file_name=source.get("filename") or path.name,
+        file_path=str(path),
+        file_bytes=file_bytes,
+        image_ocr_fn=extract_text_from_image,
+        pdf_ocr_fn=extract_text_from_pdf_paddleocr,
+        pdf_outline_fn=extract_pdf_outline_adaptively,
+        pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()),
+    )
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        save_extraction_result(
+            conn,
+            source["id"],
+            material_result,
+            status="extracted",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = {
+        "material_id": source["id"],
+        "chapter_name": source.get("chapter_name") or Path(source.get("filename") or "").stem,
+        "subject": source.get("subject") or "",
+        "file_type": source.get("file_type") or suffix.lstrip("."),
+        "filename": source.get("filename") or path.name,
+        "material_result": material_result,
+    }
+    saved_count, warnings = _auto_index_material(
+        user_id,
+        result,
+        replace_existing=True,
+    )
+    if not saved_count:
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            mark_material_status(conn, source["id"], "done")
+            conn.commit()
+        finally:
+            conn.close()
     return saved_count, warnings
 
 
@@ -3012,26 +3245,20 @@ def _process_workbench_uploads(user_id, subject, uploaded_files):
 def _source_status_label(source):
     status = source.get("processing_status") or "pending"
     if status in {"done", "completed"}:
+        if source.get("process_method") == "pdf_outline_ai":
+            return f"大纲整理 · {source.get('knowledge_count') or 0} 个知识点"
         return f"已整理 · {source.get('knowledge_count') or 0} 个知识点"
     if status == "failed":
         return "识别失败"
     if status == "text_confirmed":
-        return "文字已提取"
-    return "处理中"
-
-
-def _build_subject_overview(subject, sources):
-    if not sources:
-        return (
-            f"这是你的“{subject}”资料工作台。上传教材、讲义、真题或笔记后，"
-            "系统会自动提取文字、整理知识点，并让你直接基于全部来源提问。"
-        )
-    names = "、".join((item.get("chapter_name") or item.get("filename") or "未命名资料") for item in sources[:4])
-    tail = f"等 {len(sources)} 份资料" if len(sources) > 4 else f"共 {len(sources)} 份资料"
-    return (
-        f"当前工作台已汇集 {names}，{tail}。你可以勾选左侧来源控制回答范围，"
-        "再让 AI 归纳知识框架、比较概念、总结高频考点，或回到原文依据核对。"
-    )
+        return "文字已提取 · 待整理"
+    if status in {"drafted", "draft_ready"}:
+        return "已生成草稿 · 待确认"
+    if status == "extracted":
+        return "已提取 · 待整理"
+    if status in {"pending", "processing"}:
+        return "上次处理未完成 · 可删除后重试"
+    return f"状态：{status}"
 
 
 def _answer_subject_question(user_id, subject, source_ids, question):
@@ -3042,7 +3269,8 @@ def _answer_subject_question(user_id, subject, source_ids, question):
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            f"""SELECT id, filename, chapter_name, confirmed_text, extracted_text
+            f"""SELECT id, filename, chapter_name, confirmed_text, extracted_text,
+                       process_method
                 FROM user_materials
                 WHERE user_id=? AND subject=? AND id IN ({placeholders})""",
             (user_id, subject, *source_ids),
@@ -3073,8 +3301,14 @@ def _answer_subject_question(user_id, subject, source_ids, question):
     source_blocks = []
     for index, row in enumerate(rows, start=1):
         text = (row["confirmed_text"] or row["extracted_text"] or "").strip()
-        if not text:
-            text = "\n\n".join(knowledge_by_material.get(row["id"], []))
+        expanded_knowledge = "\n\n".join(knowledge_by_material.get(row["id"], []))
+        if row["process_method"] == "pdf_outline_ai" and expanded_knowledge:
+            text = (
+                f"【抽样识别提纲】\n{text}\n\n"
+                f"【AI基于提纲发散的知识点，需核对教材】\n{expanded_knowledge}"
+            ).strip()
+        elif not text:
+            text = expanded_knowledge
         if text:
             title = row["chapter_name"] or row["filename"] or f"来源{index}"
             source_blocks.append(f"[来源{index}：{title}]\n{text[:6500]}")
@@ -3097,7 +3331,8 @@ def _answer_subject_question(user_id, subject, source_ids, question):
         )
 
     prompt = f"""你是考研专业课资料助手。只能依据给定来源回答，不要编造。
-回答要求：先给结论，再分点解释；关键判断用[来源N]标注依据；来源不足时明确说不知道。
+回答要求：直接从结论或正文开始，不复述用户问题，不写“根据您提供的资料”等开场，不写“如需更多帮助”等结尾；分点解释；关键判断用[来源N]标注依据；来源不足时明确说不知道。
+如果来源标有“AI基于提纲发散”，必须在回答中明确说明这部分不是教材原文，建议用户回教材核对。
 
 专业课：{subject}
 用户问题：{question}
@@ -3156,16 +3391,26 @@ def _render_subject_management(selected_subject):
 def render_knowledge_page():
     """Render the source-first professional course workbench."""
     user_id = st.session_state.get("user_id", 1)
-    _ensure_session_draft_state()
-    _ensure_persist_state()
     _show_pending_toast()
     _inject_professional_workbench_styles()
 
     st.markdown(
         """
-        <div class="pk-workbench-title">
-            <h1>专业课资料工作台</h1>
-            <p>选择一门专业课，上传资料，然后直接基于来源提问。</p>
+        <div class="pk-learning-banner">
+            <div class="pk-learning-banner-inner">
+                <div class="pk-learning-banner-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="25" height="25">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                        <line x1="8" y1="7" x2="16" y2="7"/>
+                        <line x1="8" y1="11" x2="14" y2="11"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1>专业课学习</h1>
+                    <p>资料识别 · 提纲整理 · 来源问答 · 知识库 · 背诵提纲 PDF</p>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3198,15 +3443,7 @@ def render_knowledge_page():
     with source_column:
         with st.container(border=True):
             st.markdown('<div class="pk-workbench-label">来源</div>', unsafe_allow_html=True)
-            st.markdown(
-                """
-                <div class="pk-source-intro">
-                    <strong>添加资料</strong>
-                    <span>支持 PDF、图片、TXT 和 Markdown。上传后自动完成文字提取与知识点整理。</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.markdown('<div class="pk-source-heading">添加资料</div>', unsafe_allow_html=True)
             with st.form("workbench_source_upload_v1", clear_on_submit=True):
                 uploaded_files = st.file_uploader(
                     "上传资料",
@@ -3230,17 +3467,66 @@ def render_knowledge_page():
                         st.session_state["_workbench_upload_warnings"] = upload_warnings
                     st.rerun()
 
-            st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源 · 默认全部参与回答</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源</div>', unsafe_allow_html=True)
             if not sources:
                 st.caption("上传第一份资料后，来源会显示在这里。")
             for source in sources:
                 label = source.get("chapter_name") or source.get("filename") or "未命名资料"
-                checked = st.checkbox(
-                    label,
-                    value=True,
-                    key=f"workbench_source_selected_{source['id']}",
-                    help=f"{_source_status_label(source)} · {source.get('process_method') or '待识别处理方式'}",
-                )
+                source_select_col, source_action_col = st.columns([0.82, 0.18], gap="small")
+                with source_select_col:
+                    checked = st.checkbox(
+                        label,
+                        value=True,
+                        key=f"workbench_source_selected_{source['id']}",
+                        help=f"{_source_status_label(source)} · {source.get('process_method') or '待识别处理方式'}",
+                    )
+                with source_action_col:
+                    with st.popover("⋯", use_container_width=True):
+                        can_reprocess = bool(source.get("file_path"))
+                        if st.button(
+                            "按新规则重新整理",
+                            key=f"reprocess_source_{source['id']}",
+                            disabled=not can_reprocess,
+                            use_container_width=True,
+                        ):
+                            try:
+                                with st.spinner("正在重新识别并生成知识点..."):
+                                    indexed, reprocess_warnings = _reprocess_subject_source(
+                                        user_id,
+                                        source,
+                                    )
+                            except Exception as exc:
+                                st.error(f"重新整理失败：{exc}")
+                            else:
+                                _queue_toast(f"已按新规则整理出 {indexed} 个知识点")
+                                if reprocess_warnings:
+                                    st.session_state["_workbench_upload_warnings"] = reprocess_warnings[-5:]
+                                st.rerun()
+
+                        st.caption(f"删除“{label}”及其关联知识点；错题记录会保留。")
+                        confirmed = st.checkbox(
+                            "确认删除",
+                            key=f"confirm_delete_source_{source['id']}",
+                        )
+                        if st.button(
+                            "删除来源",
+                            key=f"delete_source_{source['id']}",
+                            type="primary",
+                            disabled=not confirmed,
+                            use_container_width=True,
+                        ):
+                            try:
+                                deleted = _delete_subject_source(user_id, source["id"])
+                            except Exception as exc:
+                                st.error(f"删除来源失败：{exc}")
+                            else:
+                                if deleted.get("deleted"):
+                                    _queue_toast(
+                                        f"已删除来源和 {deleted.get('knowledge_deleted', 0)} 个关联知识点"
+                                    )
+                                else:
+                                    _queue_toast("来源已不存在或无权删除")
+                                st.rerun()
                 st.caption(_source_status_label(source))
                 if checked:
                     selected_source_ids.append(source["id"])
@@ -3250,13 +3536,11 @@ def render_knowledge_page():
                         st.caption(warning)
 
     with chat_column:
-        overview = _build_subject_overview(selected_subject, sources)
         st.markdown(
             f"""
             <div class="pk-chat-hero">
                 <div class="pk-book-mark">资料对话</div>
                 <h2>{_escape_html(selected_subject)}</h2>
-                <p>{_escape_html(overview)}</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3277,9 +3561,31 @@ def render_knowledge_page():
 
         history_key = f"pk_chat_history_{user_id}_{selected_subject}"
         history = st.session_state.setdefault(history_key, [])
-        for message in history[-8:]:
+        visible_history = history[-8:]
+        visible_start = max(0, len(history) - len(visible_history))
+        previous_prompt = ""
+        for offset, message in enumerate(visible_history):
+            if message["role"] == "user":
+                previous_prompt = message["content"]
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
+                if message["role"] == "assistant":
+                    try:
+                        answer_pdf = build_chat_answer_pdf(
+                            message["content"],
+                            subject=selected_subject,
+                            prompt=previous_prompt,
+                        )
+                    except (OSError, RuntimeError, ValueError):
+                        pass
+                    else:
+                        st.download_button(
+                            "导出本回答精简版 PDF",
+                            data=answer_pdf,
+                            file_name=chat_answer_pdf_filename(selected_subject, previous_prompt),
+                            mime="application/pdf",
+                            key=f"download_chat_answer_pdf_{visible_start + offset}",
+                        )
 
         with st.form("professional_source_chat_v1", clear_on_submit=True):
             question = st.text_input(
@@ -3298,7 +3604,60 @@ def render_knowledge_page():
             history.append({"role": "assistant", "content": answer})
             st.rerun()
 
-    st.session_state["kb_subject_v2"] = selected_subject
-    with st.popover("高级校对与知识库工具（可选）", use_container_width=True):
-        st.caption("需要逐条修正文稿、维护知识点或使用错题本时，再进入这里。")
-        _render_legacy_knowledge_page(show_header=False, show_subject_setup=False)
+    st.markdown("---")
+    heading_col, export_col = st.columns([3.2, 1.4], vertical_alignment="bottom")
+    with heading_col:
+        st.markdown(
+            f"""
+            <div class="pk-section-heading">
+                <h2>{_escape_html(selected_subject)}知识库</h2>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with export_col:
+        outline_points = _load_outline_export_points(
+            user_id,
+            selected_subject,
+            selected_source_ids,
+        )
+        if not selected_source_ids:
+            st.button(
+                "导出已选来源背诵提纲 PDF",
+                key="download_knowledge_outline_pdf_empty",
+                use_container_width=True,
+                disabled=True,
+            )
+            st.caption("请先在左侧勾选至少一份来源。")
+        elif not outline_points:
+            st.button(
+                "导出已选来源背诵提纲 PDF",
+                key="download_knowledge_outline_pdf_no_points",
+                use_container_width=True,
+                disabled=True,
+            )
+            st.caption("已选来源暂无可导出的有效知识条目。")
+        else:
+            try:
+                outline_pdf = build_knowledge_outline_pdf(
+                    outline_points,
+                    subject=selected_subject,
+                    source_count=len(selected_source_ids),
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                st.error(f"生成背诵提纲失败：{exc}")
+            else:
+                st.download_button(
+                    "导出已选来源背诵提纲 PDF",
+                    data=outline_pdf,
+                    file_name=_safe_outline_pdf_filename(selected_subject),
+                    mime="application/pdf",
+                    key="download_knowledge_outline_pdf",
+                    use_container_width=True,
+                    type="primary",
+                )
+    _render_private_repository(
+        user_id,
+        subject=selected_subject,
+        show_study_tools=True,
+    )

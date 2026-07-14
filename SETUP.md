@@ -11,9 +11,13 @@
 pip install -r requirements.txt
 ```
 
-唯一依赖是 `streamlit`，其余全部使用 Python 标准库。
+项目依赖统一维护在 `requirements.txt` 中。
 
-## 2. 配置 API Key
+## 2. 配置环境变量
+
+复制 `.env.example` 为 `.env`，至少填写 `AI_API_KEY`。`.env` 只保存在本机，不要提交到 Git。
+
+也可以临时设置环境变量：
 
 **Windows (CMD)**:
 ```cmd
@@ -32,8 +36,8 @@ export AI_API_KEY="sk-your-key-here"
 
 可选配置：
 ```bash
-export AI_API_BASE="https://aiberm.com/v1"  # 默认
-export AI_MODEL="gpt-4o"                     # 默认
+export AI_API_BASE="https://api.xiaomimimo.com/v1"
+export AI_MODEL="mimo-v2.5"
 ```
 
 ## 3. 启动
@@ -45,7 +49,7 @@ export AI_MODEL="gpt-4o"                     # 默认
 streamlit run app.py --server.port 8501
 ```
 
-浏览器打开 `http://localhost:8501`
+浏览器打开 `http://localhost:8501`。Windows 启动脚本默认使用 `http://localhost:8505`。
 
 ## 4. 目录结构
 

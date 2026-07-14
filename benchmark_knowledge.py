@@ -1,13 +1,16 @@
 """知识点归纳基准测试 — 50题"""
-import urllib.request, json, sys, io, time
+import urllib.request, json, sys, io, time, os
 from difflib import get_close_matches
 from pathlib import Path
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-KEY = "sk-Sav7yLJqAZ6FxCiXy2kCOOSelXOiDceY1YzhtCNsJArcu1dx"
-BASE = "https://aiberm.com/v1"
+KEY = os.environ.get("AI_API_KEY", "").strip()
+BASE = os.environ.get("AI_API_BASE", "https://aiberm.com/v1").strip()
+
+if not KEY:
+    raise RuntimeError("请先设置 AI_API_KEY 环境变量")
 
 def load_corpus_ids():
     ids = []

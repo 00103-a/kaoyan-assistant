@@ -3,12 +3,17 @@ data/memory.db
 agent_experience_*.md
 data/user_materials/
 data/config/custom_subjects.json
+data/tasks/
+data/test_materials/
 
 # 环境变量
 .env
 
 # 构建产物
 KaoyanRAG-v*.zip
+dist/
+benchmark_report_*.txt
+benchmarks/acceptance_*.json
 __pycache__/
 *.pyc
 

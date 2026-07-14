@@ -212,17 +212,21 @@ def save_wrongbook_payload(conn, user_id, payload):
     if not data.get("ok"):
         return data
 
-    normalized_question = _space_fold(data["question"])
-    existing = conn.execute(
+    question_key = _space_fold(data["question"])
+    candidates = conn.execute(
         """
-        SELECT id, error_count
+        SELECT id, error_count, question
         FROM user_wrong_questions
-        WHERE user_id=? AND TRIM(question)=?
+        WHERE user_id=?
         ORDER BY id DESC
-        LIMIT 1
         """,
-        (user_id, normalized_question),
-    ).fetchone()
+        (user_id,),
+    ).fetchall()
+    existing = next(
+        ((row_id, error_count) for row_id, error_count, question in candidates
+         if _space_fold(question) == question_key),
+        None,
+    )
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(user_wrong_questions)")}
@@ -231,7 +235,7 @@ def save_wrongbook_payload(conn, user_id, payload):
     if existing:
         row_id, old_error_count = existing
         update_values = (
-            data["subject"], normalized_question, data["myAnswer"],
+            data["subject"], data["question"], data["myAnswer"],
             data["correctAnswer"], data["explanation"],
             max(old_error_count or 1, data["errorCount"]), now,
         )
@@ -255,7 +259,7 @@ def save_wrongbook_payload(conn, user_id, payload):
         return {"ok": True, "updated": True, "id": row_id}
 
     insert_values = (
-        user_id, data["subject"], normalized_question, data["myAnswer"],
+        user_id, data["subject"], data["question"], data["myAnswer"],
         data["correctAnswer"], data["explanation"], data["errorCount"],
     )
     if has_images_column:

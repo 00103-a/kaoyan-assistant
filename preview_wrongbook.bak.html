@@ -1652,6 +1652,13 @@
     color: var(--text-main);
     white-space: nowrap;
   }
+  .chat-concise-toggle {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 0.72rem; color: var(--text-muted); cursor: pointer;
+    margin-left: auto; margin-right: 8px; user-select: none;
+    white-space: nowrap;
+  }
+  .chat-concise-toggle input { cursor: pointer; }
   .chat-close-btn {
     background: none;
     border: none;
@@ -1676,11 +1683,11 @@
     min-width: 398px;
   }
   .chat-msg {
-    max-width: 85%;
+    max-width: 92%;
     padding: 9px 13px;
     border-radius: 13px;
-    font-size: 0.83rem;
-    line-height: 1.5;
+    font-size: 0.9rem;
+    line-height: 1.7;
     word-break: break-word;
     animation: msgIn 0.2s ease-out;
   }
@@ -1699,6 +1706,19 @@
     background: #f1f5f9;
     color: var(--text-main);
     border-bottom-left-radius: 4px;
+  }
+  .chat-msg.ai p { margin: 0 0 0.8rem; }
+  .chat-msg.ai p:last-child { margin-bottom: 0; }
+  .chat-msg.ai ul,
+  .chat-msg.ai ol { margin: 0 0 0.8rem; padding-left: 1.25rem; }
+  .chat-msg.ai li + li { margin-top: 0.35rem; }
+  .chat-msg.ai strong { font-weight: 700; color: #312e81; }
+  .chat-msg.ai code {
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+    background: rgba(79,70,229,0.1);
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 0.9em;
   }
   .chat-msg.system {
     align-self: center;
@@ -1896,6 +1916,9 @@
       <div id="chatPanel">
         <div class="chat-header">
           <h3>💬 追问 AI</h3>
+          <label class="chat-concise-toggle" title="开启后回答更简短">
+            <input type="checkbox" id="chatConciseMode" checked onchange="updateConciseLabel()"> 简洁
+          </label>
           <button class="chat-close-btn" onclick="closeChat()" title="关闭">✕</button>
         </div>
         <div class="chat-messages" id="chatMessages">
@@ -2259,7 +2282,7 @@ function buildCard(q) {
   return `
     <div class="home-card subject-${q.subjectKey}" data-qid="${q.qid}" data-mark="${q.subjectMark}" onclick="trackToQuestion(${q.qid})" title="点击查看详情 · ${q.date}">
       <div class="hc-subject">${q.subjectLabel} · ${q.date.slice(5)}</div>
-      <div class="hc-question">${q.question.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      <div class="hc-question">${q.question.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g, '<br>')}</div>
       <div class="hc-meta">
         <span class="hc-tag subject-tag">${q.subjectHint}</span>
         <span class="hc-tag err-tag">错${q.errorCount}次</span>
@@ -2520,6 +2543,15 @@ function closeChat() {
   container.classList.remove('with-chat');
 }
 
+function updateConciseLabel() {
+  const cb = document.getElementById('chatConciseMode');
+  if (!cb) return;
+  const label = cb.parentElement;
+  if (!label) return;
+  const text = label.childNodes[label.childNodes.length - 1];
+  if (text) text.textContent = cb.checked ? ' 简洁' : ' 详细';
+}
+
 function resetChat() {
   chatMessages = [];
   chatImageBase64 = null;
@@ -2539,11 +2571,71 @@ function clearImageTag() {
   document.getElementById('chatImageInput').value = '';
 }
 
+function escapeChatHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatChatInline(text) {
+  return text
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function formatChatMessage(text) {
+  const lines = escapeChatHtml(text).replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let listType = '';
+  let listItems = [];
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      blocks.push('<p>' + formatChatInline(paragraph.join('<br>')) + '</p>');
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (listItems.length) {
+      blocks.push('<' + listType + '>' + listItems.map(item => '<li>' + formatChatInline(item) + '</li>').join('') + '</' + listType + '>');
+      listItems = [];
+      listType = '';
+    }
+  };
+  lines.forEach(line => {
+    const unordered = line.match(/^\s*[-*•]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      const nextType = unordered ? 'ul' : 'ol';
+      if (listType && listType !== nextType) flushList();
+      flushParagraph();
+      listType = nextType;
+      listItems.push((unordered || ordered)[1]);
+    } else if (!line.trim()) {
+      flushParagraph();
+      flushList();
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  });
+  flushParagraph();
+  flushList();
+  return blocks.join('') || '<p></p>';
+}
+
 function addChatMessage(role, text) {
   chatMessages.push({ role, text });
   const div = document.createElement('div');
   div.className = 'chat-msg ' + role;
-  div.textContent = text;
+  if (role === 'ai') {
+    div.innerHTML = formatChatMessage(text);
+  } else {
+    div.textContent = text;
+  }
   document.getElementById('chatMessages').appendChild(div);
   scrollChatToBottom();
 }
@@ -2596,8 +2688,34 @@ async function sendChatMessage() {
   chatLoading = true;
   document.getElementById('chatSendBtn').disabled = true;
 
-  // Build AI prompt
-  let aiPrompt = '你是考研辅导助教。学生正在复习下面这道错题，请针对学生的追问给出简洁有帮助的回答。\n\n';
+  // Build AI prompt — 根据简洁模式开关决定
+  const subj = currentReviewQ ? (currentReviewQ.subject || '') : '';
+  const conciseOn = document.getElementById('chatConciseMode').checked;
+  const latexRule = '【数学公式铁律】所有公式必须用 $...$（行内）或 $$...$$（独立行）包裹。禁止使用 \\( \\) 或 \\[ \\]。禁止输出无 $ 包裹的裸 LaTeX 命令。\n\n';
+  let aiPrompt = '';
+  if (conciseOn) {
+    let conciseRules = latexRule;
+    conciseRules += '【核心规则 — 最高优先级】\n';
+    conciseRules += '简洁模式已开启。请严格遵守：\n';
+    conciseRules += '1. 全文不超过 200 字\n';
+    conciseRules += '2. 禁止展开推导过程，只给关键结论\n';
+    conciseRules += '3. 禁止使用"首先/然后/接下来/我们来/希望这样"等废话\n';
+    conciseRules += '4. 禁止举例、类比、拓展知识、考情分析\n';
+    conciseRules += '5. 直接回答学生追问，不要铺垫，不要总结\n';
+    conciseRules += '6. 用短句，每句一行，句与句之间空行\n';
+    if (subj.includes('英语')) {
+      conciseRules += '7. 英语题只讲最核心的 1 个语法点或翻译技巧，给 1 个例句即可\n';
+    } else if (subj.includes('专业')) {
+      conciseRules += '7. 专业课只讲最核心的 1 个概念或知识点，不要展开教材章节背景\n';
+    } else {
+      conciseRules += '7. 数学题只给关键公式和最终答案，不展开步骤推导\n';
+    }
+    conciseRules += '\n';
+    aiPrompt = conciseRules;
+  } else {
+    aiPrompt = latexRule;
+    aiPrompt += '你是考研辅导助教。学生正在复习下面这道错题，请针对学生的追问给出有帮助的回答。\n\n';
+  }
   aiPrompt += '【当前题目】\n' + (currentReviewQ ? currentReviewQ.question : '无') + '\n';
   aiPrompt += '【正确答案】\n' + (currentReviewQ ? currentReviewQ.correctAnswer : '无') + '\n';
   if (currentReviewQ && currentReviewQ.explanation) {
@@ -2634,7 +2752,7 @@ async function sendChatMessage() {
         messages: [
           { role: 'user', content: userContent }
         ],
-        max_tokens: 800,
+        max_tokens: 400,
         temperature: 0.3
       })
     });
@@ -2647,6 +2765,9 @@ async function sendChatMessage() {
       const msg = data.choices[0].message;
       reply = msg.content || msg.reasoning_content || reply;
     }
+    // 统一 LaTeX 分隔符：\(...\)→$...$  \[...\]→$$...$$
+    reply = reply.replace(/\\\(/g, '$').replace(/\\\)/g, '$');
+    reply = reply.replace(/\\\[/g, '$$').replace(/\\\]/g, '$$');
     addChatMessage('ai', reply);
     if (typeof renderMathInElement !== 'undefined') {
       setTimeout(() => {

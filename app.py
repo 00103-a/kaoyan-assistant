@@ -2846,7 +2846,7 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     for candidate in [question, correct_answer, user_answer]:
         candidate = candidate or ""
         _parsed = _parse_quiz_block(candidate)
-        if _parsed and _parsed['options']:
+        if _parsed and _parsed['options'] and _parsed['question']:
             return _clean_extracted_question(_parsed['full_question'])
     # 退回：原有正则匹配
     for candidate in [question, correct_answer, user_answer]:
@@ -3125,6 +3125,7 @@ def _parse_quiz_block(raw_text):
         block = block.strip()
         if not block or "Q:" not in block:
             continue
+        raw_block = block  # 保留原始块文本，供题干为空时回退提取
         lines = block.split("\n")
         question = ""
         options = []
@@ -3143,7 +3144,9 @@ def _parse_quiz_block(raw_text):
                 if q_text:
                     question = q_text
             elif line.startswith(("A)", "A.", "A、", "B)", "B.", "C)", "C.", "D)", "D.", "E)", "E.")):
-                collecting_question = False
+                # 只有已经捕获到题干后才停止收集，避免 Q: 行无文本时题干丢失
+                if question:
+                    collecting_question = False
                 collecting_explain = False
                 options.append(line)
             elif line.startswith("ANSWER:") or line.startswith("答案:") or line.startswith("答案："):
@@ -3161,6 +3164,14 @@ def _parse_quiz_block(raw_text):
                     explain = (explain + " " + line).strip()
                 elif collecting_question:
                     question = (question + " " + line).strip()
+        # 回退：题干仍为空但选项存在时，从原始块中提取 Q: 与首选项之间的文本
+        if not question and options:
+            m = re.search(
+                r'(?:Q|Question)\s*[:：]\s*\n?\s*(.+?)(?=\n\s*(?:[A-E])[).、])',
+                raw_block, re.DOTALL | re.IGNORECASE
+            )
+            if m:
+                question = m.group(1).strip()
         if not question and not options:
             continue
         full_question = question
@@ -4292,7 +4303,7 @@ if st.session_state.get("_wb_form"):
         _wb_question_image = st.session_state.get("_wb_question_image", "")
         cq1, cq2 = st.columns([4, 1])
         with cq1:
-            _wb_q = st.text_area("题目", value=_wb_q_raw, height=60, key="g_wb_q", label_visibility="collapsed")
+            _wb_q = st.text_area("题目", value=_wb_q_raw, height=180, key="g_wb_q", label_visibility="collapsed")
         with cq2:
             if st.button("AI 提取题目", key="g_wb_extract", help="优先从图片提取题目，失败则从文本提取"):
                 _ca = st.session_state.get("g_wb_ca", st.session_state.get("_wb_correct", ""))
@@ -5832,45 +5843,153 @@ if st.session_state.page == "wrongbook":
 
                 # 根据科目选择不同的 AI 分析框架
                 if "英语" in _ai_subj:
-                    _prompt = f"""你是考研英语辅导专家。首先识别题目类型（语法单选/翻译/阅读理解/写作/完形填空/词汇），然后按以下 5 步框架逐题分析：
+                    _prompt = f"""你是考研英语辅导专家，正在帮学生复盘错题。首先识别题目类型（语法单选/翻译/阅读理解/写作/完形填空/词汇），然后按以下框架逐题分析。
 
 【Step 1 — 题型与考点】
-识别题型 + 本题考查的核心知识点（如：虚拟语气在 suggest 后的用法、英译汉中的动词搭配、阅读理解中的态度推断题）
+一句话说清题型和考点。
 
 【Step 2 — 知识点讲解】
-把这个语法规则/翻译技巧/阅读方法/写作框架讲清楚，给 1-2 个同类例句或对比
+把这个语法规则/翻译技巧/阅读方法/写作框架讲清楚。
 
 【Step 3 — 应用到本题】
-逐一分析每个选项为什么对/错，或逐句拆解翻译要点和替代表达
+逐一分析每个选项为什么对/错，或逐句拆解翻译要点。
 
 【Step 4 — 学生错误诊断】
-对比学生答案，指出思维偏差或知识盲区。如果学生回答了一些但不是全错，先肯定正确的部分再指出问题
+指出学生具体思维偏差或知识盲区。先肯定合理部分再纠错。
 
 【Step 5 — 同类速记】
-给一句能记住的规律/口诀/模板句式（如"建议命令要求，that 从句用原形"）
+给一句能记住的规律/口诀/模板句式。
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 300 字（含空格和标点）
+- 每个 Step 不超过 3 行，超出立即截断换下一个 Step
+- 例句只给 1 个，多的不要
+- 禁止展开讲扩展知识、背景故事、同类题型对比
+- 只讲本题相关的内容，不讲"还可以怎么考"
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 每条要点、每个例句各占独立一行
+- 项与项之间空一行，严禁紧贴
+- 每 1-2 句后必须换行
 
 【硬性输出协议】
 1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
 <description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
-2. description 写一句话题型+考点说明（如"考查虚拟语气 suggest 用法的语法单选题"）
+2. description 写一句话题型+考点说明
 3. answer 只包含正确答案（选项字母+内容，或参考答案译文）
-4. explanation 按 Step 1-5 展开，每个 Step 用【Step N — 标题】开头，答案和解析分开
+4. explanation 按 Step 1-5 展开，严格遵守篇幅限制和排版铁律
 5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
-6. 无法严格满足格式时，输出空标签
+6. 超长或文字墙视为输出不合格
+
+题目：{_ai_q}
+学生错误答案：{_ai_my or "无"}"""
+                elif "专业" in _ai_subj:
+                    _prompt = f"""你是考研专业课辅导专家，正在帮学生复盘错题。请按以下框架逐题分析。
+
+【Step 1 — 考点定位】
+本题考查的是哪个知识点？属于哪个章节/模块？一句话定位。
+
+【Step 2 — 概念辨析】
+涉及概念混淆时用"A vs B"对照格式，分两段对比；
+单一考点时把核心原理讲透，每个关键要素单独一行。
+
+【Step 3 — 正确答案解析】
+给出正确答案，讲清楚推导过程和关键依据。
+如：教材原文引用、公式推导、逻辑推理链。
+
+【Step 4 — 学生错误诊断】
+判断错误类型并具体说明：
+
+• 概念不清 — 混淆了什么
+
+• 审题偏差 — 漏看了哪个条件
+
+• 记忆混淆 — 记错了什么
+
+• 推导错误 — 哪一步逻辑链断了
+
+【Step 5 — 记忆技巧】
+选一种方法给出：
+
+• 口诀 — 朗朗上口的短句
+
+• 对比表格 — 两栏对照
+
+• 关键词串联 — 3-5 个词串成逻辑链
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 300 字（含空格标点）
+- 每个 Step 不超过 3 行，超出立即截断
+- 概念辨析只讲最核心的 1 个对比点，不要展开多个
+- 禁止展开讲教材章节背景、学派争论、相关论文
+- 只讲本题涉及的内容
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 每条要点各占独立一行，项与项之间空一行
+- 每 1-2 句后必须换行
+
+【硬性输出协议】
+1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
+<description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
+2. description 写一句话的考点+题型说明
+3. answer 只包含正确答案（选项字母+内容，或核心结论）
+4. explanation 按 Step 1-5 展开，严格遵守篇幅限制和排版铁律
+5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
+6. 超长或文字墙视为输出不合格
 
 题目：{_ai_q}
 学生错误答案：{_ai_my or "无"}"""
                 else:
-                    _prompt = f"""你是考研{_ai_subj}辅导专家。对下面题目生成正确答案、题目说明和解析。
+                    _prompt = f"""你是考研数学辅导专家，正在帮学生复盘错题。请按以下框架逐题分析。
+
+【Step 1 — 考点定位】
+本题考查哪个知识点（如极限计算/中值定理/矩阵运算/概率分布），用一句话说明。
+
+【Step 2 — 选项逐项解析】
+逐一分析每个选项，每项独立一段，项与项之间空一行：
+• A) — 分析 A 选项为什么对或错，关键判断依据
+• B) — 分析 B 选项为什么对或错，关键判断依据
+• C) — 分析 C 选项为什么对或错，关键判断依据
+• D) — 分析 D 选项为什么对或错，关键判断依据
+如果题目不是选择题（无选项），则改为逐步推导的解题过程，每一步公式独占一行。
+
+【Step 3 — 学生错误诊断】
+对比学生答案和正确答案，定位错因类型：
+• 计算失误 — 具体哪一步算错了
+• 公式误用 — 用了哪个错误公式，应该用什么
+• 概念混淆 — 混淆了哪两个概念
+• 审题偏差 — 漏看了什么条件或理解错了什么
+
+【Step 4 — 防错技巧】
+给一个具体的防错方法。
+如：先验证定义域 / 画图辅助 / 特殊值检验 / 检查量纲。
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 250 字（含空格标点）
+- 每个 Step 不超过 3 行，超出立即截断
+- 选项解析每项 1-2 句话，不要展开推导
+- 只讲本题，不讲同类题型或考情
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 选项逐项解析时，每项之间空一行
+- 每条公式独占一行，公式用 $$...$$ 包围
+- 每条要点各占独立一行，项与项之间空一行
+- 每 1-2 句后必须换行
 
 【硬性输出协议】
 1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
 <description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
-2. description 写一句话的题目说明，概括题目考查的知识点和题型（如"考查导数定义的选择题"、"考查矩阵乘法的计算题"）。
-3. answer 只能包含最终数值、表达式、选项或一句结论；禁止推导、过程词、前后缀。
-4. explanation 写面向学生的简洁教学步骤，不得包含内部思考、任务分析、用户意图或自言自语。
-5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述。
-6. 无法严格满足格式时，输出空标签，不得把推理过程冒充答案。
+2. description 写一句话的题目说明，概括考查的知识点和题型（如"考查导数定义的选择题"）
+3. answer 只包含最终数值、表达式、选项或一句结论；禁止推导过程
+4. explanation 按 Step 1-4 展开，严格遵守篇幅限制和排版铁律
+5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
+6. 超长或文字墙视为输出不合格
 
 数学公式用 $$...$$ 包围
 

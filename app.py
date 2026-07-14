@@ -25,12 +25,15 @@ import extra_streamlit_components as stx
 from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
-
-# Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
-import streamlit.elements.lib.policies as _policies
-import streamlit.components.v1.custom_component as _cc
-_policies.check_cache_replay_rules = lambda: None
-_cc.check_cache_replay_rules = lambda: None
+from wrongbook_utils import (
+    detect_subject,
+    extract_final_message_content,
+    parse_wrongbook_ai_answer,
+    parse_wrongbook_ai_question,
+    parse_smart_answer_output,
+    save_wrongbook_payload,
+    split_wrongbook_answer_explanation,
+)
 
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
@@ -224,7 +227,8 @@ st.markdown("""
     .st-key-nav_hub button:active, .st-key-nav_main button:active,
     .st-key-nav_english button:active, .st-key-nav_checkin button:active,
     .st-key-nav_popularity button:active, .st-key-nav_material button:active,
-    .st-key-nav_suggest button:active {
+    .st-key-nav_suggest button:active,
+    .st-key-nav_wrongbook button:active {
         transform: scale(0.96) !important;
         transition: transform 0.1s ease !important;
     }
@@ -240,7 +244,8 @@ st.markdown("""
     .st-key-nav_checkin button::before,
     .st-key-nav_popularity button::before,
     .st-key-nav_material button::before,
-    .st-key-nav_suggest button::before {
+    .st-key-nav_suggest button::before,
+    .st-key-nav_wrongbook button::before {
         content: '';
         display: inline-block; width: 8px; height: 8px; border-radius: 50%;
         margin-right: 10px; flex-shrink: 0;
@@ -253,6 +258,7 @@ st.markdown("""
     .st-key-nav_popularity button::before { background: #db2777; box-shadow: 0 0 6px rgba(219,39,119,0.4); }
     .st-key-nav_material button::before   { background: #ca8a04; box-shadow: 0 0 6px rgba(202,138,4,0.4); }
     .st-key-nav_suggest button::before    { background: #0284c7; box-shadow: 0 0 6px rgba(2,132,199,0.4); }
+    .st-key-nav_wrongbook button::before  { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
 
     /* Active nav-item dot — glowing */
     .nav-item-active .nav-dot {
@@ -264,7 +270,8 @@ st.markdown("""
     /* Sidebar buttons — match nav-item font + style */
     .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_english button,
     .st-key-nav_checkin button, .st-key-nav_popularity button,
-    .st-key-nav_material button, .st-key-nav_suggest button {
+    .st-key-nav_material button, .st-key-nav_suggest button,
+    .st-key-nav_wrongbook button {
         background: transparent !important; color: #64748b !important;
         border: none !important; border-radius: 10px !important;
         font-weight: 500 !important; text-align: left !important;
@@ -278,7 +285,8 @@ st.markdown("""
     .st-key-nav_hub button:hover, .st-key-nav_main button:hover,
     .st-key-nav_english button:hover, .st-key-nav_checkin button:hover,
     .st-key-nav_popularity button:hover, .st-key-nav_material button:hover,
-    .st-key-nav_suggest button:hover {
+    .st-key-nav_suggest button:hover,
+    .st-key-nav_wrongbook button:hover {
         background: #f1f5f9 !important; color: #4f46e5 !important;
         transform: translateX(3px) !important;
     }
@@ -720,33 +728,67 @@ st.markdown("""
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
     }
 </style>
+<style>
+    /* Keep formulas in the same text flow as the surrounding question. */
+    .katex-display { display: inline !important; margin: 0 0.15em !important; text-align: left !important; }
+    .katex-display > .katex { display: inline !important; text-align: left !important; }
+</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 """, unsafe_allow_html=True)
 
 st.components.v1.html("""
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script>
 (function(){
+  var host, doc;
+  try { host = window.parent; doc = host.document; } catch (e) { return; }
+  function renderMath(){
+    if (!host.renderMathInElement) return;
+    host.renderMathInElement(doc.body, {
+      delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\\\(',right:'\\\\)',display:false}],
+      throwOnError:false, strict:false
+    });
+  }
+  function addScript(id, src, done){
+    var existing = doc.getElementById(id);
+    if (existing) {
+      if (host.renderMathInElement) done();
+      else existing.addEventListener('load', done, {once:true});
+      return;
+    }
+    var script = doc.createElement('script');
+    script.id = id; script.src = src; script.onload = done;
+    doc.head.appendChild(script);
+  }
+  if (!doc.getElementById('katex-main-style')) {
+    var link = doc.createElement('link');
+    link.id = 'katex-main-style'; link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+    doc.head.appendChild(link);
+  }
+  addScript('katex-main-script', 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js', function(){
+    addScript('katex-main-auto-render', 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js', renderMath);
+  });
   const HIDE = ['expand_more','expand_less','chevron_right','chevron_left','keyboard_arrow_right',
     'keyboard_arrow_left','keyboard_arrow_down','keyboard_arrow_up','arrow_drop_down','arrow_drop_up',
     'arrow_right','arrow_left','arrow_down','arrow_up','upload','file_upload','cloud_upload',
     'attach_file','close','search','menu','more_vert','more_horiz','delete','edit','add','remove'];
   const RE = new RegExp('^('+HIDE.join('|')+')$');
   function run(){
-    var w=document.createTreeWalker(document.body,4,null,false), n;
+    var w=doc.createTreeWalker(doc.body,4,null,false), n;
     while(n=w.nextNode()){ var t=n.nodeValue; if(t&&RE.test(t.trim())) n.nodeValue=''; }
   }
-  run(); new MutationObserver(run).observe(document.body,{childList:true,subtree:true});
+  run(); new MutationObserver(run).observe(doc.body,{childList:true,subtree:true});
 })();
 </script>
 """, height=0)
 
 # ==================== 持久化登录（CookieManager 方案） ====================
 
-@st.cache_resource
 def get_cookie_manager():
-    return stx.CookieManager()
+    """每个 session 独立创建 CookieManager，避免 @st.cache_resource 跨 session 缓存导致串号"""
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = stx.CookieManager()
+    return st.session_state.cookie_manager
 
 cookie_manager = get_cookie_manager()
 
@@ -1252,10 +1294,79 @@ def init_memory_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    # 错题本支持图片笔记：给已有表追加 images 列（JSON 数组，元素为 base64 data URL）
+    try:
+        c.execute("ALTER TABLE user_wrong_questions ADD COLUMN images TEXT")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+
+    # 错题本支持学生补充理解 + AI 点评
+    try:
+        c.execute("ALTER TABLE user_wrong_questions ADD COLUMN my_understanding TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+
     conn.commit()
     conn.close()
 
 import knowledge_base as kb
+
+@st.cache_resource
+def _start_wb_save_server():
+    """启动本地 HTTP 服务器接收错题保存请求（支持图片 base64，绕开 URL 长度限制）。
+    返回监听端口；启动失败返回 None。"""
+    import threading, json as _json_srv
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os as _os
+
+    PORT = 8753
+    _DB_PATH = _os.path.abspath(MEMORY_DB)
+
+    class WBSaveHandler(BaseHTTPRequestHandler):
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+        def do_OPTIONS(self):
+            self.send_response(204); self._cors(); self.end_headers()
+
+        def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length <= 0 or length > 24 * 1024 * 1024:
+                    return self._respond(413, {"success": False, "error": "图片数据过大，请减少图片数量后重试"})
+                body = self.rfile.read(length).decode("utf-8")
+                data = _json_srv.loads(body)
+                uid = data.get("user_id")
+                if not uid:
+                    return self._respond(400, {"success": False, "error": "未登录"})
+                conn = sqlite3.connect(_DB_PATH)
+                result = save_wrongbook_payload(conn, uid, data)
+                conn.close()
+                if result.get("ok"):
+                    self._respond(200, {"success": True, "updated": bool(result.get("updated"))})
+                else:
+                    self._respond(400, {"success": False, "error": result.get("error", "保存失败")})
+            except Exception as e:
+                self._respond(500, {"success": False, "error": str(e)})
+
+        def _respond(self, code, obj):
+            body = _json_srv.dumps(obj).encode("utf-8")
+            self.send_response(code); self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+        def log_message(self, *a): pass
+
+    try:
+        srv = HTTPServer(("127.0.0.1", PORT), WBSaveHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return PORT
+    except Exception:
+        return None
+
 
 def log_visit(action, detail=""):
     try:
@@ -2259,8 +2370,8 @@ def _append_debug_log(entry):
         st.session_state.debug_logs = st.session_state.debug_logs[-50:]
 
 
-def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
-    """调用 LLM API（非流式）+ 调试日志 + 自动重试"""
+def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3, image_base64=None):
+    """调用 LLM API（非流式）+ 调试日志 + 自动重试。image_base64 为 data:image/...;base64,... 格式"""
     _init_debug_log()
     t0 = datetime.now()
     log_entry = {
@@ -2270,10 +2381,19 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
         "temperature": temperature,
         "prompt_len": len(prompt),
         "prompt_preview": prompt[:250],
+        "has_image": bool(image_base64),
     }
+    # Build messages — support vision when image_base64 is provided
+    if image_base64 and isinstance(image_base64, str) and image_base64.startswith("data:image/"):
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_base64}}
+        ]
+    else:
+        content = prompt
     data = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": content}],
         "max_tokens": max_tokens,
         "temperature": temperature
     }
@@ -2674,6 +2794,78 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
     conn.commit()
     conn.close()
 
+def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
+    """通用：将错题写入 user_wrong_questions 表"""
+    uid = st.session_state.get("user_id", 1)
+    init_memory_db()
+    payload = {
+        "subject": subject,
+        "question": question,
+        "myAnswer": user_answer,
+        "correctAnswer": correct_answer,
+        "explanation": explanation,
+        "errorCount": 1,
+    }
+    try:
+        conn = sqlite3.connect(MEMORY_DB)
+        result = save_wrongbook_payload(conn, uid, payload)
+        conn.close()
+        return bool(result.get("ok"))
+    except Exception:
+        return False
+
+def open_wrongbook_form(question, correct_answer, user_answer="", explanation="", subject=""):
+    """Open the global wrongbook form with prefilled content."""
+    st.session_state._wb_form = True
+    st.session_state._wb_form_fresh = False
+    st.session_state._wb_question = question or ""
+    st.session_state._wb_correct = correct_answer or ""
+    st.session_state._wb_user_answer = user_answer or ""
+    st.session_state._wb_explanation = explanation or ""
+    st.session_state._wb_subject = subject or ""
+    st.session_state.g_wb_subj = subject or "数学"  # 同步 widget key
+
+def _clean_extracted_question(text, max_len=900):
+    """Normalize a question extracted from AI output or local rules."""
+    if not text:
+        return ""
+    cleaned = str(text).strip()
+    cleaned = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", cleaned, flags=re.I | re.S).strip()
+    cleaned = re.sub(r"^(?:原始题目|题目|问题|Q|Question)\s*[:：]\s*", "", cleaned, flags=re.I).strip()
+    # 截断到"答案/解析"之前——加入英文 ANSWER/EXPLAIN 以兼容选择题格式
+    cleaned = re.split(
+        r"(?:\n|\s{1,3})(?:答案|正确答案|解析|解答|思路|学生答案|我的答案|ANSWER|EXPLAIN|answer|explain)\s*[:：]",
+        cleaned, maxsplit=1, flags=re.I
+    )[0].strip()
+    cleaned = cleaned.strip(" \n\r\t\"'“”")
+    return cleaned[:max_len].strip()
+
+def _extract_wrongbook_question_locally(question="", correct_answer="", user_answer=""):
+    """Best-effort local fallback for math-heavy wrongbook question extraction."""
+    # 优先：选择题格式 Q:...A)...B)...ANSWER:...EXPLAIN:... → 提取题干+选项（不含答案/解析）
+    for candidate in [question, correct_answer, user_answer]:
+        candidate = candidate or ""
+        _parsed = _parse_quiz_block(candidate)
+        if _parsed and _parsed['options'] and _parsed['question']:
+            return _clean_extracted_question(_parsed['full_question'])
+    # 退回：原有正则匹配
+    for candidate in [question, correct_answer, user_answer]:
+        candidate = candidate or ""
+        for pattern in [
+            r"(?:原始题目|题目|问题|Q|Question)\s*[:：]\s*(.+?)(?=(?:\n|\s{1,3})(?:答案|正确答案|解析|解答|思路|学生答案|我的答案|ANSWER|EXPLAIN)\s*[:：]|\Z)",
+            r"(求(?:极限|导数|偏导|积分|不定积分|定积分|通解|极值|面积|体积|概率|期望|方差).+?)(?=\n|。|；|;|\Z)",
+            r"(计算.+?)(?=\n|。|；|;|\Z)",
+            r"(判断.+?)(?=\n|。|；|;|\Z)",
+            r"(证明.+?)(?=\n|。|；|;|\Z)",
+            r"(设\s*.+?求.+?)(?=\n|。|；|;|\Z)",
+        ]:
+            m = re.search(pattern, candidate, flags=re.I | re.S)
+            if m:
+                extracted = _clean_extracted_question(m.group(1))
+                if extracted:
+                    return extracted
+    return _clean_extracted_question(question)
+
 def _record_qa_knowledge(docs):
     uid = st.session_state.get("user_id", 1)
     try:
@@ -2765,6 +2957,27 @@ def _fix_latex(text):
     r"""Convert \(\) to $, \[\] to $$"""
     text = text.replace("\\( ", "$ ").replace(" \\)", " $").replace("\\(", "$").replace("\\)", "$").replace("\\[", "$$").replace("\\]", "$$")
     return text
+
+def _prepare_math_for_display(text):
+    """Normalize common OCR LaTex so the reading preview can render it."""
+    text = _fix_latex(text or "")
+    def _normalize_plain(segment):
+        segment = re.sub(
+            r"\\begin\{(?:cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|aligned)\}[\s\S]*?\\end\{(?:cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|aligned)\}",
+            lambda match: f"${match.group(0)}$",
+            segment,
+        )
+        return re.sub(
+            r"\\frac\{(?:[^{}]|\{[^{}]*\})*\}\{(?:[^{}]|\{[^{}]*\})*\}|"
+            r"\\sqrt\{(?:[^{}]|\{[^{}]*\})*\}|"
+            r"\\(?:lim|int|sum|prod|sin|cos|tan|ln|log|exp|max|min|partial|infty|pi|xi|theta|varphi|rho|Omega|cdot|to|leq|geq|neq|sim|approx)\b",
+            lambda match: f"${match.group(0)}$",
+            segment,
+        )
+    parts = re.split(r"(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)", text)
+    for index in range(0, len(parts), 2):
+        parts[index] = _normalize_plain(parts[index])
+    return "".join(parts)
 
 def _collapse_math(text):
     """Merge line breaks inside $$...$$ and $...$ blocks to prevent st.markdown <br> splitting"""
@@ -2869,17 +3082,109 @@ def render_qa_cards(raw_text, columns=2, typing=False):
                     st.markdown(_escape_md(_collapse_math(opt)))
 
         if answer or explain:
+            # 加入错题本：预填题干+选项 / 正确答案+解析
+            _wb_q_full = question
+            if options:
+                _wb_q_full += ("\n" if _wb_q_full else "") + "\n".join(options[:4])
+            _wb_correct = answer or ""
+            if explain:
+                _wb_correct += ("\n\n解析：" + explain) if _wb_correct else explain
+            # 用 on_click 回调设置 session_state（rerun 前执行），避免在 expander 内调 st.rerun()
+            def _on_qa_wb_click(_q=_wb_q_full, _c=_wb_correct):
+                st.session_state._wb_form = True
+                st.session_state._wb_form_fresh = False
+                st.session_state._wb_question = _q
+                st.session_state._wb_correct = _c
+                st.session_state._wb_user_answer = ""
+                st.session_state._wb_explanation = ""
+                st.session_state._wb_subject = "数学"; st.session_state.g_wb_subj = "数学"
+                st.session_state._wb_just_added = True
             with st.expander("答案与解析", expanded=False):
                 if answer:
                     st.markdown(f"**正确答案**: {_escape_md(_collapse_math(_fix_latex(answer)))}")
                 if explain:
                     st.markdown(_escape_md(_collapse_math(_fix_latex(explain))))
                 _katex_refresh()
+                st.button("加入错题本", key=f"qa_card_wb_{qi}", use_container_width=True, on_click=_on_qa_wb_click)
         st.markdown("</div>", unsafe_allow_html=True)
         qi += 1
         if qi >= 1:
             break
     _katex_refresh()
+
+def _parse_quiz_block(raw_text):
+    """解析 Q:/A)/B)/.../ANSWER:/EXPLAIN: 格式的选择题，返回结构化数据。
+    复用 render_qa_cards 的解析逻辑，但不做渲染，返回 dict 供答题/加入错题本使用。
+    返回 {"question": "题干", "options": ["A) ..","B) ..",...], "answer": "B",
+           "explain": "...", "full_question": "题干\\nA)..\\nB).."} 或 None。
+    """
+    if not raw_text:
+        return None
+    blocks = raw_text.split("---")
+    for block in blocks:
+        block = block.strip()
+        if not block or "Q:" not in block:
+            continue
+        raw_block = block  # 保留原始块文本，供题干为空时回退提取
+        lines = block.split("\n")
+        question = ""
+        options = []
+        answer = ""
+        explain = ""
+        collecting_question = False
+        collecting_explain = False
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("Q:") or line.startswith("Q："):
+                collecting_question = True
+                collecting_explain = False
+                q_text = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+                if q_text:
+                    question = q_text
+            elif line.startswith(("A)", "A.", "A、", "B)", "B.", "C)", "C.", "D)", "D.", "E)", "E.")):
+                # 只有已经捕获到题干后才停止收集，避免 Q: 行无文本时题干丢失
+                if question:
+                    collecting_question = False
+                collecting_explain = False
+                options.append(line)
+            elif line.startswith("ANSWER:") or line.startswith("答案:") or line.startswith("答案："):
+                collecting_question = False
+                collecting_explain = False
+                answer = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            elif line.startswith("EXPLAIN:") or line.startswith("解析:") or line.startswith("解析："):
+                collecting_question = False
+                collecting_explain = True
+                explain = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            elif line.startswith(("[ANSWER", "[QUIZ]", "[END]", "[KNOWLEDGE")):
+                continue
+            else:
+                if collecting_explain:
+                    explain = (explain + " " + line).strip()
+                elif collecting_question:
+                    question = (question + " " + line).strip()
+        # 回退：题干仍为空但选项存在时，从原始块中提取 Q: 与首选项之间的文本
+        if not question and options:
+            m = re.search(
+                r'(?:Q|Question)\s*[:：]\s*\n?\s*(.+?)(?=\n\s*(?:[A-E])[).、])',
+                raw_block, re.DOTALL | re.IGNORECASE
+            )
+            if m:
+                question = m.group(1).strip()
+        if not question and not options:
+            continue
+        full_question = question
+        if options:
+            full_question += ("\n" if full_question else "") + "\n".join(options)
+        return {
+            "question": question,
+            "options": options,
+            "answer": answer,
+            "explain": explain,
+            "full_question": full_question,
+        }
+    return None
 
 def _extract_summary(text, max_lines=3):
     """从 corpus 正文提取 1-2 句摘要（开篇核心定义 + 第一行要点）"""
@@ -3261,19 +3566,10 @@ def classify_query(query):
 
 def parse_multi_output(raw_text):
     """解析 LLM 一次输出的 [ANSWER]/[KNOWLEDGE]/[QUIZ]"""
-    if "[ANSWER]" not in raw_text:
-        cleaned = raw_text.replace("\\(", "$").replace("\\)", "$").replace("\\[", "$$").replace("\\]", "$$")
-        return {"answer": cleaned[:2000], "knowledge": [], "quiz": ""}
-    def extract(begin, end):
-        if begin in raw_text and end in raw_text:
-            return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
-        return ""
-    knowledge_part = raw_text.split("[KNOWLEDGE]", 1)[-1] if "[KNOWLEDGE]" in raw_text else ""
-    knowledge_raw = knowledge_part.split("[", 1)[0].strip() if "[" in knowledge_part else knowledge_part.strip()
-    return {
-        "answer": _fix_latex(extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500]),
-        "knowledge": [k.strip() for k in knowledge_raw.split(",") if k.strip()],
-    }
+    parsed = parse_smart_answer_output(raw_text)
+    if parsed["answer"]:
+        parsed["answer"] = _prepare_math_for_display(parsed["answer"])
+    return parsed
 
 def run_pipeline(query, results, model_name, img_data=None):
     """统一管线: 流式调用 LLM，逐 token 返回"""
@@ -3296,9 +3592,14 @@ def run_pipeline(query, results, model_name, img_data=None):
 ⚠️ 数学公式强制规则（必须遵守，否则无法显示）：
 {math_rules}
 
-输出格式：
+禁止输出思维链、内部分析、推理过程或任何与答案无关的前言。只输出面向学生的最终答案与简洁解析。
+
+输出格式（必须完整保留三个标签，标签外不得有任何内容）：
+[DESCRIPTION]
+（一句话题目说明，概括题目考查的知识点和题型，如"考查极限计算的选择题"）
+
 [ANSWER]
-（回答）
+（最终答案与简洁解析）
 
 [KNOWLEDGE]
 （概念名，逗号分隔）
@@ -3316,7 +3617,7 @@ def run_pipeline(query, results, model_name, img_data=None):
     else:
         user_content = f"问题：{query}"
     model = model_name
-    max_tok = 800 if img_data else 1500
+    max_tok = 2400 if img_data else 1800
     temp = 0.3
     data = {
         "model": model,
@@ -3347,11 +3648,8 @@ def run_pipeline(query, results, model_name, img_data=None):
                     try:
                         obj = json.loads(payload)
                         delta_obj = obj.get("choices", [{}])[0].get("delta", {})
-                        # MiMo 是思维链模型，内容在 reasoning_content 中
                         c = delta_obj.get("content")
                         delta = c if isinstance(c, str) else ""
-                        if not delta:
-                            delta = delta_obj.get("reasoning_content") or ""
                         if delta:
                             raw_full += delta
                             yield {"type": "token", "content": delta}
@@ -3369,11 +3667,9 @@ def run_pipeline(query, results, model_name, img_data=None):
             req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
             with urllib.request.urlopen(req, timeout=180) as resp:
                 msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
-                c = msg.get('content')
-                raw_full = c if isinstance(c, str) else ''
-                if not raw_full:
-                    raw_full = msg.get('reasoning_content') or ''
-                yield {"type": "token", "content": raw_full}
+                raw_full = extract_final_message_content(msg)
+                if raw_full:
+                    yield {"type": "token", "content": raw_full}
             result = parse_multi_output(raw_full)
             result["_raw_debug"] = raw_full[:500]
             result["qtype"] = "math"
@@ -3861,6 +4157,50 @@ if not st.session_state.logged_in:
 
     st.stop()
 
+# ==================== 全局：错题保存 & 删除处理（必须在页面路由之前）====================
+_uid = st.session_state.get("user_id")
+_qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+
+# ── 保存成功后跳转错题本页面（HTTP 保存方案，无 payload）──
+_nav = _qp.get("nav", "")
+if isinstance(_nav, list): _nav = _nav[0] if _nav else ""
+if _nav == "wrongbook":
+    st.session_state.page = "wrongbook"
+    if hasattr(st, "query_params") and "nav" in st.query_params:
+        del st.query_params["nav"]
+    st.rerun()
+
+# ── 错题保存 ──
+_wb_save = _qp.get("wb_save_payload", "")
+if isinstance(_wb_save, list): _wb_save = _wb_save[0] if _wb_save else ""
+if _wb_save and _uid:
+    try:
+        import json as _json_s
+        _p = _json_s.loads(_wb_save)
+        if _p.get("question"):
+            init_memory_db()
+            _conn = sqlite3.connect(MEMORY_DB)
+            _conn.execute(
+                """INSERT INTO user_wrong_questions (user_id, subject, question, user_answer, correct_answer, explanation, error_count, status)
+                   VALUES (?,?,?,?,?,?,?,'active')""",
+                (_uid, _p.get("subject",""), _p.get("question",""),
+                 _p.get("myAnswer",""), _p.get("correctAnswer",""),
+                 _p.get("explanation",""), _p.get("errorCount",1))
+            )
+            _conn.commit()
+            _conn.close()
+            st.session_state["_wb_save_ok"] = True
+    except Exception:
+        pass
+    # 清除参数 → 跳到错题本页面
+    if hasattr(st, "query_params"):
+        if "wb_save_payload" in st.query_params:
+            del st.query_params["wb_save_payload"]
+    else:
+        st.experimental_set_query_params()
+    st.session_state.page = "wrongbook"
+    st.rerun()
+
 # ==================== 全局侧边栏导航 ====================
 _username = st.session_state.get('username', '?')
 with st.sidebar:
@@ -3897,6 +4237,7 @@ with st.sidebar:
         ("popularity","高校热度"),
         ("material", "学习资料"),
         ("suggest",  "提建议"),
+        ("wrongbook","错题本"),
     ]
     for p, label in _group2:
         if current_page == p:
@@ -3940,6 +4281,182 @@ with st.sidebar:
         st.session_state.user_id = None
         st.session_state.page = "hub"
         st.rerun()
+
+# ==================== 全局：加入错题本表单 ====================
+if st.session_state.get("_wb_form"):
+    # Clear old widget state when form freshly opened
+    if not st.session_state.get("_wb_form_fresh"):
+        for _k in ["g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
+            st.session_state.pop(_k, None)
+        st.session_state._wb_form_fresh = True
+    st.markdown("---")
+    st.markdown("### 加入错题本")
+    with st.container(border=True):
+        # 题目 — AI提取+可编辑
+        _wb_q_raw = st.session_state.get("_wb_question", "")
+        if "_wb_pending_question" in st.session_state:
+            st.session_state["g_wb_q"] = st.session_state.pop("_wb_pending_question")
+        st.caption("题目")
+        st.markdown(_escape_md(_collapse_math(_prepare_math_for_display(_wb_q_raw))) if _wb_q_raw else "（无）")
+        _katex_refresh()
+        _wb_img = st.file_uploader("上传题目图片（可选，优先从图片识别）", type=["png", "jpg", "jpeg"], key="g_wb_img")
+        _wb_question_image = st.session_state.get("_wb_question_image", "")
+        cq1, cq2 = st.columns([4, 1])
+        with cq1:
+            _wb_q = st.text_area("题目", value=_wb_q_raw, height=180, key="g_wb_q", label_visibility="collapsed")
+        with cq2:
+            if st.button("AI 提取题目", key="g_wb_extract", help="优先从图片提取题目，失败则从文本提取"):
+                _ca = st.session_state.get("g_wb_ca", st.session_state.get("_wb_correct", ""))
+                _ua = st.session_state.get("g_wb_ua", st.session_state.get("_wb_user_answer", ""))
+                _current_q = st.session_state.get("g_wb_q", st.session_state.get("_wb_question", ""))
+                if _ca.strip() or _current_q.strip() or _ua.strip() or _wb_img or _wb_question_image:
+                    with st.spinner("提取中..."):
+                        extracted_q = ""
+                        # 第一层：优先从用户上传的图片直接 OCR 提取题目
+                        if _wb_img or _wb_question_image:
+                            try:
+                                if _wb_question_image:
+                                    _img_b64 = _wb_question_image
+                                else:
+                                    import base64 as _b64
+                                    _img_bytes = _wb_img.read()
+                                    _img_b64 = _b64.b64encode(_img_bytes).decode()
+                                _ocr_prompt = """你是 OCR 提取器。只提取图片中的题目原文。
+【硬性输出协议】
+只能输出一次 <question>题目原文</question>，标签外不得有任何字符。
+禁止输出思考过程、分析、内心独白、答案、解析、提示、寒暄或 Markdown。
+保留题目全部条件与选项，数学公式使用 LaTeX。
+没有清晰题干时输出 <question></question>，不得猜测或编造。"""
+                                _ocr_content = call_llm_api(_ocr_prompt, model="mimo-v2.5", max_tokens=500, temperature=0.1, image_base64=f"data:image/png;base64,{_img_b64}")
+                                extracted_q = parse_wrongbook_ai_question(_ocr_content)
+                            except Exception:
+                                extracted_q = ""
+                        # 第二层：图片 OCR 失败或无图片，从 AI 回答/文本提取
+                        if not extracted_q:
+                            fallback_q = _extract_wrongbook_question_locally(_current_q, _ca, _ua)
+                            try:
+                                _ex_p = f"""你是考研错题本的题干提取器。请从下面信息中提取“原始题目”。
+
+【硬性输出协议】
+1. 只能输出一次 <question>原始题目</question>，标签外不得有任何字符。
+2. 禁止输出思考、分析、解释、答案、错因、寒暄或 Markdown 代码块。
+3. 禁止把内部推理写进 <question> 标签。
+4. 数学公式保留为 LaTeX，保留全部条件与选项。
+5. 如果“当前题目”已经完整，原样返回；无法确定时返回 <question></question>，不得编造。
+
+当前题目：
+{_current_q[:1500]}
+
+我的答案：
+{_ua[:1200]}
+
+正确答案/解析：
+{_ca[:4500]}
+
+本地候选题目：
+{fallback_q}"""
+                                _content = call_llm_api(_ex_p, model="mimo-v2.5", max_tokens=500, temperature=0)
+                                extracted_q = parse_wrongbook_ai_question(_content) or fallback_q
+                            except Exception:
+                                extracted_q = fallback_q
+                        if extracted_q:
+                            st.session_state._wb_question = extracted_q
+                            st.session_state["_wb_pending_question"] = extracted_q
+                            st.rerun()
+                        else:
+                            st.warning("提取失败，请手动输入题目")
+                else:
+                    st.warning("没有可提取的内容，请先填写题目或上传图片")
+        # 正确答案 — 完整显示，可编辑
+        _wb_ca_raw, _wb_ex_raw = split_wrongbook_answer_explanation(
+            st.session_state.get("_wb_correct", ""),
+            st.session_state.get("_wb_explanation", ""),
+        )
+        st.caption("正确答案")
+        st.markdown(_escape_md(_collapse_math(_prepare_math_for_display(_wb_ca_raw))) if _wb_ca_raw else "（无）")
+        _wb_ca = st.text_area("正确答案", value=_wb_ca_raw, height=80, key="g_wb_ca", label_visibility="collapsed")
+        st.caption("解析")
+        st.markdown(_escape_md(_collapse_math(_prepare_math_for_display(_wb_ex_raw))) if _wb_ex_raw else "（无）")
+        _wb_ex = st.text_area("解析", value=_wb_ex_raw, height=100, key="g_wb_ex", label_visibility="collapsed")
+        # 我的答案：英语解析、翻译、单词等模块可能没有“错误答案”，因此这里允许留空。
+        _wb_ua = st.text_area("我的答案（可选）", value=st.session_state.get("_wb_user_answer", ""), height=120, key="g_wb_ua", placeholder="如果是刷题错题，写下你当时的错误答案；如果是英语解析/单词复盘，可以留空。")
+        # 科目
+        _wb_subject = st.selectbox("科目", ["数学", "英语", "专业课"],
+            index={"数学":0,"英语":1,"专业课":2}.get(st.session_state.get("_wb_subject","数学"), 0),
+            key="g_wb_subj")
+        _wb_ai = st.checkbox("AI 帮我分析错因", value=False, key="g_wb_ai")
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("确认加入", use_container_width=True, type="primary", key="g_wb_ok"):
+                if not _wb_q.strip():
+                    st.warning("请填写题目")
+                else:
+                    explanation = _wb_ex.strip()
+                    if _wb_ai and _wb_ca.strip():
+                        with st.spinner("AI 正在分析你的错因..."):
+                            try:
+                                # 根据科目使用不同的错因分析框架
+                                if "英语" in _wb_subject:
+                                    analyze_prompt = f"""你是考研英语辅导专家。学生做错了一道英语题，请按以下框架分析错因：
+
+【Step 1 — 题型识别】先判断这是什么题型（语法单选/翻译/阅读/写作/完形/词汇）
+【Step 2 — 考点讲解】讲清楚本题考查的知识点（语法规则/翻译技巧/阅读方法/写作框架），给1-2个例句
+【Step 3 — 正确答案解析】为什么正确答案是对的，逐一排除错误选项
+【Step 4 — 学生错误诊断】对比学生答案和正确答案，指出具体思维偏差
+【Step 5 — 同类速记】给一句可记住的规律/口诀/模板句式
+
+控制在300字以内。
+
+题目：{_wb_q}
+学生答案：{_wb_ua or '（未填写）'}
+正确答案：{_wb_ca}"""
+                                elif "专业" in _wb_subject:
+                                    analyze_prompt = f"""你是考研专业课辅导专家。学生做错了一道专业课题目，请按以下框架分析错因：
+
+1. 【考点定位】本题考查的是哪个知识点？属于哪个章节/模块？
+2. 【概念辨析】如果涉及概念混淆，把易混概念对比讲清楚
+3. 【正确答案解析】正确答案的推导过程和关键依据
+4. 【学生错误诊断】对比学生答案，分析是概念不清/审题偏差/记忆混淆/推导错误中的哪一种
+5. 【记忆技巧】给一个帮助记忆的方法（口诀/图示/对比表/关键词串联）
+
+控制在300字以内。
+
+题目：{_wb_q}
+学生答案：{_wb_ua or '（未填写）'}
+正确答案：{_wb_ca}"""
+                                else:
+                                    analyze_prompt = f"""你是考研数学辅导专家。学生做错了一道数学题，请按以下框架分析错因：
+
+1. 【考点定位】本题考查哪个知识点（如极限计算/中值定理/矩阵运算/概率分布）
+2. 【解题思路】正确的解题步骤和关键公式
+3. 【学生错误诊断】对比学生答案，定位错因类型：
+   - 计算失误：具体哪一步算错了
+   - 公式误用：用了哪个错误公式，应该用什么
+   - 概念混淆：混淆了哪两个概念
+   - 审题偏差：漏看了什么条件或理解错了什么
+4. 【防错技巧】给一个具体的防错方法（如先验证定义域/画图辅助/特殊值检验）
+
+控制在200字以内。
+
+题目：{_wb_q}
+学生答案：{_wb_ua or '（未填写）'}
+正确答案：{_wb_ca}"""
+                                _analysis = call_llm_api(analyze_prompt, model="mimo-v2.5", max_tokens=500)
+                                explanation = (explanation + "\n\n错因分析：" + _analysis).strip()
+                            except Exception:
+                                pass
+                    if add_to_wrongbook(_wb_q, _wb_ca, _wb_ua, explanation, _wb_subject):
+                        st.success("已加入错题本！")
+                        for k in ["_wb_form","_wb_question","_wb_question_image","_wb_correct","_wb_user_answer","_wb_explanation","_wb_subject","_wb_form_fresh","g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
+                            st.session_state.pop(k, None)
+                        st.rerun()
+                    else:
+                        st.error("保存失败")
+        with b2:
+            if st.button("取消", use_container_width=True, key="g_wb_cancel"):
+                for k in ["_wb_form","_wb_question","_wb_question_image","_wb_correct","_wb_user_answer","_wb_explanation","_wb_subject","_wb_form_fresh","g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
 # ==================== 数学问答 ====================
 if st.session_state.page == "main":
@@ -4025,7 +4542,9 @@ if st.session_state.page == "main":
                     import base64 as _b64
                     img_bytes = _upload.read()
                     img_b64 = _b64.b64encode(img_bytes).decode()
-                    ocr_prompt = "请识别这张考研数学题目图片中的文字和公式，直接输出题目原文，不要添加任何解释。如有公式请用 LaTeX 格式。"
+                    ocr_prompt = """识别这张考研题目图片中的题干与公式。禁止输出思维链、分析、解题过程或说明。
+只能按以下格式输出，标签外不得有任何内容：
+<question>题目原文，公式用 LaTeX</question>"""
                     ocr_data = {
                         "model": "mimo-v2.5",
                         "messages": [{"role": "user", "content": [
@@ -4042,9 +4561,15 @@ if st.session_state.page == "main":
                             method="POST")
                         with urllib.request.urlopen(ocr_req, timeout=60) as ocr_resp:
                             ocr_msg = json.loads(ocr_resp.read().decode("utf-8"))["choices"][0]["message"]
-                        user_input = _extract_content(ocr_msg) or "（图片识别失败，请手动输入问题）"
+                        user_input = parse_wrongbook_ai_question(extract_final_message_content(ocr_msg))
+                        # 图片 OCR 提取失败时，不放弃——继续把图片送入回答管线，从 AI 回答中提取题目
+                        if not user_input:
+                            st.warning("直接识别题目失败，将尝试通过 AI 回答提取题目...")
+                            user_input = "[图片题目]"  # 占位，让后续管线继续运行
+                            st.session_state["_qa_ocr_fallback"] = True
+                            st.session_state["_qa_img_b64"] = img_b64
                         with st.expander("📷 识别结果"):
-                            st.caption(user_input)
+                            st.caption(user_input if user_input != "[图片题目]" else "未识别到完整题目，将通过 AI 回答提取")
                     except Exception as e:
                         st.error(f"图片识别失败: {e}")
                         user_input = ""
@@ -4066,7 +4591,14 @@ if st.session_state.page == "main":
 """
                     for i, doc in enumerate(docs):
                         prompt += f"\n[{i+1}] {doc['id']}: {doc['text'][:800]}\n"
-                    prompt += "\n请给出准确、有深度的回答。如有公式请用 LaTeX 格式。"
+                    prompt += """
+
+禁止输出思维链、内部分析或解题前言。只输出面向学生的最终答案与简洁解析。
+严格按以下格式输出，标签外不得有任何内容：
+[ANSWER]
+（最终答案与简洁解析，公式使用 LaTeX）
+[KNOWLEDGE]
+（知识点，逗号分隔）"""
                     mm_data = {
                         "model": "mimo-v2.5",
                         "messages": [{"role": "user", "content": [
@@ -4082,55 +4614,74 @@ if st.session_state.page == "main":
                         method="POST")
                     with urllib.request.urlopen(mm_req, timeout=120) as mm_resp:
                         mm_msg = json.loads(mm_resp.read().decode("utf-8"))["choices"][0]["message"]
-                    answer = _extract_content(mm_msg) or "（AI 回复为空，请重试）"
+                    parsed_answer = parse_smart_answer_output(extract_final_message_content(mm_msg))
+                    answer = _fix_latex(parsed_answer["answer"])
+                    answer_desc = parsed_answer.get("description", "")
+                if not answer:
+                    st.error("模型未返回符合格式的最终答案，请重试。")
+                    st.session_state._last_answer_text = ""
+                    st.stop()
+                if answer_desc.strip():
+                    st.markdown(f'<div style="color:#4f46e5;font-size:0.9em;margin-bottom:8px;">📝 {_escape_md(answer_desc.strip())}</div>', unsafe_allow_html=True)
                 st.markdown("### 回答")
-                st.markdown(f'<div class="qa-card">{answer}</div>', unsafe_allow_html=True)
+                processed_answer = _escape_md(_collapse_math(answer))
+                st.markdown(f'<div class="qa-card">{processed_answer}</div>', unsafe_allow_html=True)
+                _katex_refresh()
+                st.session_state._last_answer_text = answer
+                st.session_state._last_results = docs
+                st.session_state._last_query = user_input.replace("\n[附题目截图]", "")
                 if docs:
                     ref_html = "".join(f'<span class="ref-tag">{d["id"]}</span>' for d in docs)
                     st.markdown(f'<div style="margin-top:8px;">{ref_html}</div>', unsafe_allow_html=True)
                     _record_qa_knowledge(docs)
-                st.stop()
+                # 知识点归纳
+                _matched = smart_match_knowledge(st.session_state._last_query)
+                if _matched:
+                    st.session_state._matched_knowledge = _matched
+                    for kid in _matched:
+                        update_memory(kid, False, error_type="自动归纳")
+                st.rerun()
 
+            # OCR 降级：图片识别失败时，用图片直接送入回答管线，从 AI 回答中提取题目
+            _ocr_fallback = st.session_state.pop("_qa_ocr_fallback", False)
+            _ocr_img_b64 = st.session_state.pop("_qa_img_b64", None)
             if not user_input:
                 st.warning("请输入问题或上传题目截图")
                 st.stop()
 
             corpus = load_corpus()
-            docs = search_corpus(user_input, corpus, top_k=3)
+            # OCR 降级时 user_input 只是占位符，用空字符串做检索
+            _search_query = "" if _ocr_fallback else user_input
+            docs = search_corpus(_search_query, corpus, top_k=3)
 
             st.markdown('<div class="qa-card">', unsafe_allow_html=True)
             st.markdown("### 回答")
             thinking_placeholder = st.empty()
             thinking_placeholder.markdown("AI 正在思考...")
 
-            raw_full = ""
             output = None
-            for event in run_pipeline(user_input, docs, "mimo-v2.5"):
-                if event["type"] == "token":
-                    raw_full += event["content"]
-                elif event["type"] == "done":
+            for event in run_pipeline(user_input, docs, "mimo-v2.5", img_data=_ocr_img_b64):
+                if event["type"] == "done":
                     output = event["result"]
 
             thinking_placeholder.empty()
             answer_text = ""
+            description_text = ""
             if output and output.get("answer"):
                 answer_text = output["answer"]
-            elif raw_full:
-                if "[ANSWER]" in raw_full:
-                    answer_text = raw_full.split("[ANSWER]", 1)[1]
-                    if "[KNOWLEDGE]" in answer_text:
-                        answer_text = answer_text.split("[KNOWLEDGE]")[0]
-                else:
-                    answer_text = raw_full
+                description_text = output.get("description", "")
 
             if answer_text.strip():
+                # 显示题目说明
+                if description_text.strip():
+                    st.markdown(f'<div style="color:#4f46e5;font-size:0.9em;margin-bottom:8px;">📝 {_escape_md(description_text.strip())}</div>', unsafe_allow_html=True)
                 answer_placeholder = st.empty()
                 _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
                 _katex_refresh()
                 st.session_state._last_answer_text = answer_text.strip()
             else:
-                thinking_placeholder.markdown("（AI 回复为空，请重试）")
-                st.session_state._last_answer_text = "（AI 回复为空，请重试）"
+                thinking_placeholder.markdown("（模型未返回最终答案，请重试）")
+                st.session_state._last_answer_text = ""
             st.markdown('</div>', unsafe_allow_html=True)
             add_thinking("回答完成")
             log_visit("提问", user_input[:50])
@@ -4172,7 +4723,9 @@ if st.session_state.page == "main":
         # --- 问答后交互按钮（_ask 块外，rerun 后仍可渲染）---
         if not (_ask and (_q.strip() or _upload)) and st.session_state.get("_last_answer_text"):
             st.markdown("### 回答")
-            st.markdown(f'<div class="qa-card">{st.session_state._last_answer_text}</div>', unsafe_allow_html=True)
+            answer_text = _escape_md(_collapse_math(_fix_latex(st.session_state._last_answer_text)))
+            st.markdown(f'<div class="qa-card">{answer_text}</div>', unsafe_allow_html=True)
+            _katex_refresh()
             last_results = st.session_state.get("_last_results", [])
             if last_results:
                 ref_html = "".join(f'<span class="ref-tag">{d["id"]}</span>' for d in last_results)
@@ -4189,7 +4742,7 @@ if st.session_state.page == "main":
 
         if st.session_state.get("_last_query"):
             st.markdown("### 这个回答对你有帮助吗？")
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 if st.button("掌握了", use_container_width=True):
                     last_results = st.session_state.get("_last_results", [])
@@ -4220,6 +4773,27 @@ if st.session_state.page == "main":
                             st.session_state._btn_quiz = generate_review_questions([{"knowledge_id": k} for k in m[:2]])
                     else:
                         st.session_state._action_msg = "未匹配到相关知识点"
+                    st.rerun()
+            with c4:
+                if st.button("加入错题本", use_container_width=True):
+                    # 尝试用 _parse_quiz_block 解析选择题格式，分离题干/选项和答案/解析
+                    _raw_q = st.session_state.get("_last_query", "")
+                    _parsed = _parse_quiz_block(_raw_q)
+                    if _parsed:
+                        _wb_q = _parsed['full_question']
+                        _wb_c = _parsed['answer'] or ''
+                        if _parsed['explain']:
+                            _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
+                    else:
+                        _wb_q = _raw_q
+                        _wb_c = st.session_state.get("_last_answer_text", "")
+                    st.session_state._wb_form = True
+                    st.session_state._wb_form_fresh = False
+                    st.session_state._wb_question = _wb_q
+                    st.session_state._wb_correct = _wb_c
+                    st.session_state._wb_user_answer = ""
+                    st.session_state._wb_explanation = ""
+                    st.session_state._wb_subject = "数学"; st.session_state.g_wb_subj = "数学"
                     st.rerun()
 
         # --- Bottom Tabs ---
@@ -4292,10 +4866,32 @@ if st.session_state.page == "main":
                     if st.session_state.get("_kb_result"):
                         st.markdown("### 评分结果")
                         st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
-                        if st.button("关闭", key=f"quiz_close_res_{doc_id}"):
-                            st.session_state.pop("_kb_result", None)
-                            st.session_state.pop("_kb_qid", None)
-                            st.rerun()
+                        cc1, cc2 = st.columns(2)
+                        with cc1:
+                            if st.button("关闭", key=f"quiz_close_res_{doc_id}_c"):
+                                st.session_state.pop("_kb_result", None)
+                                st.session_state.pop("_kb_qid", None)
+                                st.rerun()
+                        with cc2:
+                            if st.button("加入错题本", key=f"quiz_wb_{doc_id}"):
+                                # 用 _parse_quiz_block 分离题干+选项 / 答案+解析，避免把整个题目文本（含答案）塞进错题本
+                                _raw_q = quiz.get('questions', '') if quiz else ''
+                                _parsed = _parse_quiz_block(_raw_q)
+                                if _parsed:
+                                    _wb_q = _parsed['full_question']
+                                    _wb_c = _parsed['answer'] or ''
+                                    if _parsed['explain']:
+                                        _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
+                                else:
+                                    _wb_q = _raw_q
+                                    _wb_c = st.session_state.get("_kb_result", "")
+                                st.session_state._wb_form = True
+                                st.session_state._wb_question = _wb_q
+                                st.session_state._wb_correct = _wb_c
+                                st.session_state._wb_user_answer = st.session_state.get(f"quiz_ans_{doc_id}", "")
+                                st.session_state._wb_explanation = ""
+                                st.session_state._wb_subject = "数学"; st.session_state.g_wb_subj = "数学"
+                                st.rerun()
                     elif quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
                         ans = st.text_area("你的解法", key=f"quiz_ans_{doc_id}", height=150,
@@ -4332,10 +4928,21 @@ if st.session_state.page == "main":
                     if st.session_state.get("_kb_concept_result"):
                         st.markdown("### 评分结果")
                         st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_concept_result))))
-                        if st.button("关闭", key=f"concept_close_res_{doc_id}"):
-                            st.session_state.pop("_kb_concept_result", None)
-                            st.session_state.pop("_kb_concept_qid", None)
-                            st.rerun()
+                        cc1, cc2 = st.columns(2)
+                        with cc1:
+                            if st.button("关闭", key=f"concept_close_res_{doc_id}_c"):
+                                st.session_state.pop("_kb_concept_result", None)
+                                st.session_state.pop("_kb_concept_qid", None)
+                                st.rerun()
+                        with cc2:
+                            if st.button("加入错题本", key=f"concept_wb_{doc_id}"):
+                                st.session_state._wb_form = True
+                                st.session_state._wb_question = f"概念自测：{clean_name}"
+                                st.session_state._wb_correct = st.session_state.get("_kb_concept_result", "")
+                                st.session_state._wb_user_answer = st.session_state.get(f"concept_ans_{doc_id}", "")
+                                st.session_state._wb_explanation = ""
+                                st.session_state._wb_subject = "数学"; st.session_state.g_wb_subj = "数学"
+                                st.rerun()
                     elif not st.session_state.get("_kb_concept_result"):
                         concept_quiz_text = f"概念自测：{clean_name}"
                         st.info(concept_quiz_text)
@@ -4403,8 +5010,13 @@ if st.session_state.page == "main":
                                 st.rerun()
 
                     if st.session_state.get("_rev_quiz_id") == i:
-                        quiz = st.session_state.pop("_rev_quiz", None)
-                        st.session_state.pop("_rev_quiz_id", None)
+                        # 加入错题本后清除题目数据（_wb_just_added 由 render_qa_cards 内按钮设置）
+                        if st.session_state.pop("_wb_just_added", False):
+                            st.session_state.pop("_rev_quiz", None)
+                            st.session_state.pop("_rev_quiz_id", None)
+                            st.rerun()
+                        # 用 get 不用 pop：保证 rerun 后 render_qa_cards 仍被调用，按钮点击事件不丢失
+                        quiz = st.session_state.get("_rev_quiz")
                         if quiz and quiz.get("success"):
                             render_qa_cards(quiz['questions'], columns=1)
 
@@ -5173,6 +5785,469 @@ if st.session_state.page == "suggest":
 
     st.stop()
 
+# ==================== 错题本 ====================
+if st.session_state.page == "wrongbook":
+    from pathlib import Path as _Path
+    uid = st.session_state.get("user_id")
+
+    # ── 卡片删除桥接（v2：预渲染隐藏按钮）──
+    # 详情见下方 — 每个错题预渲染 st.button(key="wb_iframe_del_<id>")，iframe JS 通过 CSS class 定位点击。
+    # ── AI 生成 & 保存桥接按钮（保留 textarea on_change 作为 AI 生成路径）──
+    if st.button("ai-gen", key="__wb_ai_gen__"):
+        pass
+    if st.button("save", key="__wb_save__"):
+        pass
+
+    # ── 图片识别桥接：隐藏 text_area，iframe JS 通过父窗口 DOM 写入 base64 图片 ──
+    # JS 设置 textarea.value + dispatchEvent('input') → Streamlit 自动触发 on_change → rerun
+    _extracted_text = st.session_state.pop("_wb_extracted_question", None)
+    _extract_error = st.session_state.pop("_wb_extract_error", "")
+
+    def _on_img_bridge_change():
+        _img = st.session_state.get("__wb_img_bridge__", "")
+        if _img and isinstance(_img, str) and _img.startswith("data:image/"):
+            try:
+                _prompt = """你是 OCR 提取器。只提取图片中的题目原文。
+
+【硬性输出协议】
+只能输出一次 <question>题目原文</question>，标签外不得有任何字符。
+禁止输出思考过程、分析、内心独白、答案、解析、提示、寒暄或 Markdown。
+保留题目全部条件与选项，数学公式使用 LaTeX。
+没有清晰题干时输出 <question></question>，不得猜测或编造。"""
+                _resp = call_llm_api(_prompt, temperature=0.1, image_base64=_img)
+                _parsed_question = parse_wrongbook_ai_question(_resp)
+                if _parsed_question:
+                    st.session_state["_wb_extracted_question"] = _parsed_question
+                else:
+                    st.session_state["_wb_extract_error"] = "没有识别到完整题干，原内容已保留"
+            except Exception as _img_error:
+                st.session_state["_wb_extract_error"] = f"图片识别失败，原内容已保留：{_img_error}"
+            st.session_state["__wb_img_bridge__"] = ""
+
+    st.text_area("img-bridge", key="__wb_img_bridge__", on_change=_on_img_bridge_change,
+                 label_visibility="collapsed", height=1)
+
+    # ── Action bridge：处理 AI 生成答案 & 保存错题（替代 history.replaceState + 按钮点击）──
+    def _on_action_bridge_change():
+        _raw = st.session_state.get("__wb_action_bridge__", "")
+        if not _raw or not _raw.startswith("{"):
+            return
+        try:
+            import json as _json3
+            _action = _json3.loads(_raw)
+            _act = _action.get("action", "")
+            if _act == "ai_generate":
+                _ai_q = _action.get("question", "")
+                _ai_subj = _action.get("subject", "高数")
+                _ai_my = _action.get("myAnswer", "")
+
+                # 根据科目选择不同的 AI 分析框架
+                if "英语" in _ai_subj:
+                    _prompt = f"""你是考研英语辅导专家，正在帮学生复盘错题。首先识别题目类型（语法单选/翻译/阅读理解/写作/完形填空/词汇），然后按以下框架逐题分析。
+
+【Step 1 — 题型与考点】
+一句话说清题型和考点。
+
+【Step 2 — 知识点讲解】
+把这个语法规则/翻译技巧/阅读方法/写作框架讲清楚。
+
+【Step 3 — 应用到本题】
+逐一分析每个选项为什么对/错，或逐句拆解翻译要点。
+
+【Step 4 — 学生错误诊断】
+指出学生具体思维偏差或知识盲区。先肯定合理部分再纠错。
+
+【Step 5 — 同类速记】
+给一句能记住的规律/口诀/模板句式。
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 300 字（含空格和标点）
+- 每个 Step 不超过 3 行，超出立即截断换下一个 Step
+- 例句只给 1 个，多的不要
+- 禁止展开讲扩展知识、背景故事、同类题型对比
+- 只讲本题相关的内容，不讲"还可以怎么考"
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 每条要点、每个例句各占独立一行
+- 项与项之间空一行，严禁紧贴
+- 每 1-2 句后必须换行
+
+【硬性输出协议】
+1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
+<description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
+2. description 写一句话题型+考点说明
+3. answer 只包含正确答案（选项字母+内容，或参考答案译文）
+4. explanation 按 Step 1-5 展开，严格遵守篇幅限制和排版铁律
+5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
+6. 超长或文字墙视为输出不合格
+
+题目：{_ai_q}
+学生错误答案：{_ai_my or "无"}"""
+                elif "专业" in _ai_subj:
+                    _prompt = f"""你是考研专业课辅导专家，正在帮学生复盘错题。请按以下框架逐题分析。
+
+【Step 1 — 考点定位】
+本题考查的是哪个知识点？属于哪个章节/模块？一句话定位。
+
+【Step 2 — 概念辨析】
+涉及概念混淆时用"A vs B"对照格式，分两段对比；
+单一考点时把核心原理讲透，每个关键要素单独一行。
+
+【Step 3 — 正确答案解析】
+给出正确答案，讲清楚推导过程和关键依据。
+如：教材原文引用、公式推导、逻辑推理链。
+
+【Step 4 — 学生错误诊断】
+判断错误类型并具体说明：
+
+• 概念不清 — 混淆了什么
+
+• 审题偏差 — 漏看了哪个条件
+
+• 记忆混淆 — 记错了什么
+
+• 推导错误 — 哪一步逻辑链断了
+
+【Step 5 — 记忆技巧】
+选一种方法给出：
+
+• 口诀 — 朗朗上口的短句
+
+• 对比表格 — 两栏对照
+
+• 关键词串联 — 3-5 个词串成逻辑链
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 300 字（含空格标点）
+- 每个 Step 不超过 3 行，超出立即截断
+- 概念辨析只讲最核心的 1 个对比点，不要展开多个
+- 禁止展开讲教材章节背景、学派争论、相关论文
+- 只讲本题涉及的内容
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 每条要点各占独立一行，项与项之间空一行
+- 每 1-2 句后必须换行
+
+【硬性输出协议】
+1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
+<description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
+2. description 写一句话的考点+题型说明
+3. answer 只包含正确答案（选项字母+内容，或核心结论）
+4. explanation 按 Step 1-5 展开，严格遵守篇幅限制和排版铁律
+5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
+6. 超长或文字墙视为输出不合格
+
+题目：{_ai_q}
+学生错误答案：{_ai_my or "无"}"""
+                else:
+                    _prompt = f"""你是考研数学辅导专家，正在帮学生复盘错题。请按以下框架逐题分析。
+
+【Step 1 — 考点定位】
+本题考查哪个知识点（如极限计算/中值定理/矩阵运算/概率分布），用一句话说明。
+
+【Step 2 — 选项逐项解析】
+逐一分析每个选项，每项独立一段，项与项之间空一行：
+• A) — 分析 A 选项为什么对或错，关键判断依据
+• B) — 分析 B 选项为什么对或错，关键判断依据
+• C) — 分析 C 选项为什么对或错，关键判断依据
+• D) — 分析 D 选项为什么对或错，关键判断依据
+如果题目不是选择题（无选项），则改为逐步推导的解题过程，每一步公式独占一行。
+
+【Step 3 — 学生错误诊断】
+对比学生答案和正确答案，定位错因类型：
+• 计算失误 — 具体哪一步算错了
+• 公式误用 — 用了哪个错误公式，应该用什么
+• 概念混淆 — 混淆了哪两个概念
+• 审题偏差 — 漏看了什么条件或理解错了什么
+
+【Step 4 — 防错技巧】
+给一个具体的防错方法。
+如：先验证定义域 / 画图辅助 / 特殊值检验 / 检查量纲。
+
+【篇幅限制 — 硬性约束】
+- 整个 explanation 标签内容不超过 250 字（含空格标点）
+- 每个 Step 不超过 3 行，超出立即截断
+- 选项解析每项 1-2 句话，不要展开推导
+- 只讲本题，不讲同类题型或考情
+
+【排版铁律】
+- Step 标题后换行，内容另起一行
+- 每个 Step 之间空一整行
+- 选项逐项解析时，每项之间空一行
+- 每条公式独占一行，公式用 $$...$$ 包围
+- 每条要点各占独立一行，项与项之间空一行
+- 每 1-2 句后必须换行
+
+【硬性输出协议】
+1. 只能输出以下三个 XML 标签，顺序固定，标签外不得有任何字符：
+<description>题目说明</description><answer>最终答案</answer><explanation>教学解析</explanation>
+2. description 写一句话的题目说明，概括考查的知识点和题型（如"考查导数定义的选择题"）
+3. answer 只包含最终数值、表达式、选项或一句结论；禁止推导过程
+4. explanation 按 Step 1-4 展开，严格遵守篇幅限制和排版铁律
+5. 禁止输出 <think>、Markdown 代码块、寒暄、提示词复述
+6. 超长或文字墙视为输出不合格
+
+数学公式用 $$...$$ 包围
+
+题目：{_ai_q}
+学生错误答案：{_ai_my or "无"}"""
+                _resp = call_llm_api(_prompt, temperature=0.3)
+                _parsed_ai = parse_wrongbook_ai_answer(_resp)
+                if not _parsed_ai:
+                    st.session_state["_wb_action_error"] = "AI 返回格式不合规，已拒绝写入，请重试"
+                else:
+                    st.session_state["_wb_ai_result"] = {
+                        "correctAnswer": _parsed_ai["answer"],
+                        "explanation": _parsed_ai["explanation"],
+                        "description": _parsed_ai.get("description", ""),
+                    }
+            elif _act == "save_understanding":
+                # 学生在复习时补充理解 + AI 点评，写入错题记录
+                _db_id = _action.get("dbId")
+                _understanding = _action.get("understanding", "")
+                _ai_review = _action.get("aiReview", "")
+                if _db_id and _understanding:
+                    init_memory_db()
+                    # 确保 my_understanding 字段存在
+                    _conn2 = sqlite3.connect(MEMORY_DB)
+                    try:
+                        _conn2.execute("SELECT my_understanding FROM user_wrong_questions LIMIT 1")
+                    except:
+                        _conn2.execute("ALTER TABLE user_wrong_questions ADD COLUMN my_understanding TEXT DEFAULT ''")
+                    # 将理解和点评追加到 explanation 后面，同时写入 my_understanding
+                    _conn2.execute(
+                        "UPDATE user_wrong_questions SET explanation = explanation || ? WHERE id=? AND user_id=?",
+                        (f"\n\n【我的理解】{_understanding}\n【AI 点评】{_ai_review}", _db_id, uid))
+                    _conn2.execute(
+                        "UPDATE user_wrong_questions SET my_understanding = ? WHERE id=? AND user_id=?",
+                        (f"理解：{_understanding}\n点评：{_ai_review}", _db_id, uid))
+                    _conn2.commit()
+                    _conn2.close()
+            elif _act == "save":
+                _payload = _action.get("payload", {})
+                init_memory_db()
+                _conn = sqlite3.connect(MEMORY_DB)
+                _save_result = save_wrongbook_payload(_conn, uid, _payload)
+                _conn.close()
+                if _save_result.get("ok"):
+                    st.session_state["_wb_save_ok"] = True
+                    st.session_state["_wb_save_mode"] = "updated" if _save_result.get("updated") else "inserted"
+                else:
+                    st.session_state["_wb_action_error"] = _save_result.get("error", "保存失败")
+        except Exception as _e:
+            st.session_state["_wb_action_error"] = str(_e)
+        st.session_state["__wb_action_bridge__"] = ""
+
+    st.text_area("action-bridge", key="__wb_action_bridge__", on_change=_on_action_bridge_change,
+                 label_visibility="collapsed", height=1)
+
+    # ── 从 session_state 恢复结果（跨 rerun 持久化）──
+    _ai_result = st.session_state.pop("_wb_ai_result", None)
+    _save_ok = st.session_state.pop("_wb_save_ok", False)
+    _save_mode = st.session_state.pop("_wb_save_mode", "inserted")
+    _action_error = st.session_state.pop("_wb_action_error", "")
+
+    # Exit button: return to 考研助手 main hub
+    c_exit, c_title = st.columns([1, 10])
+    with c_exit:
+        if st.button("← 考研助手", key="wb_exit"):
+            st.session_state.page = "hub"
+            st.rerun()
+
+    # Quick delete section: shows all wrong questions with delete buttons
+    init_memory_db()
+    conn = sqlite3.connect(MEMORY_DB)
+    c = conn.cursor()
+    c.execute("SELECT id, subject, question, created_at FROM user_wrong_questions WHERE user_id=? ORDER BY created_at DESC", (uid,))
+    _all_rows = c.fetchall()
+    conn.close()
+
+    # ── 预渲染隐藏按钮：刷新（保存错题后触发 rerun 重新查询）──
+    # iframe sandbox 无 allow-top-navigation，不能用 location.href 导航；
+    # 改用点击此按钮触发 Streamlit rerun，重新查询数据库显示新错题。
+    if st.button("refresh", key="__wb_refresh__", help=""):
+        st.rerun()
+
+    # ── 预渲染隐藏删除按钮：每个错题一个，供 iframe 内 JS 通过 class 定位并 click ──
+    # CSS 用 [class*="st-key-wb_iframe_del_"] 统一隐藏（见下方样式块）
+    for _r in _all_rows:
+        _rid = _r[0]
+        if st.button("del", key=f"wb_iframe_del_{_rid}", help=""):
+            init_memory_db()
+            _conn = sqlite3.connect(MEMORY_DB)
+            _conn.execute("DELETE FROM user_wrong_questions WHERE id=? AND user_id=?", (_rid, uid))
+            _conn.commit()
+            _conn.close()
+            st.rerun()
+
+    if _all_rows:
+        with st.expander(f"管理错题（共{len(_all_rows)}题）", expanded=False):
+            for _r in _all_rows:
+                _rid, _rsubj, _rq, _rdate = _r
+                _rdate_short = (_rdate or "")[:10]
+                dc1, dc2 = st.columns([15, 1])
+                with dc1:
+                    st.caption(f"{_rsubj} · {_rdate_short} · {(_rq or '')[:50]}...")
+                with dc2:
+                    if st.button("✕", key=f"wb_del_{_rid}", help="删除"):
+                        conn = sqlite3.connect(MEMORY_DB)
+                        conn.execute("DELETE FROM user_wrong_questions WHERE id=? AND user_id=?", (_rid, uid))
+                        conn.commit()
+                        conn.close()
+                        st.rerun()
+
+    # Full-screen CSS
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"], [data-testid="stSidebar"] * { display: none !important; width: 0 !important; min-width: 0 !important; }
+    header { display: none !important; }
+    footer { display: none !important; }
+    .stMainBlockContainer, .block-container, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] > div { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+    .stApp { overflow: hidden !important; }
+    /* 隐藏所有预渲染的错题删除桥接按钮（key=wb_iframe_del_<id>）*/
+    div[class*="st-key-wb_iframe_del_"] { display: none !important; }
+    /* 隐藏 AI 生成、保存桥接按钮 和 图片桥接 textarea */
+    .st-key-__wb_ai_gen__, .st-key-__wb_save__, .st-key-__wb_img_bridge__, .st-key-__wb_action_bridge__,
+    .st-key-__wb_refresh__ { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    html_path = _Path(__file__).parent / "preview_wrongbook.bak.html"
+    if not html_path.exists():
+        st.error("错题本预览文件未找到")
+        st.stop()
+
+    html_content = html_path.read_text(encoding="utf-8")
+
+    # wrongbook-full-question-fix: the preview template clamps home-card questions
+    # to three lines. Override it at runtime so every saved question is readable
+    # in full, including line breaks and long formulas.
+    html_content = html_content.replace(
+        "</head>",
+        """<style id="wrongbook-full-question-fix">
+        .home-card .hc-question {
+            display: block !important;
+            -webkit-line-clamp: unset !important;
+            -webkit-box-orient: initial !important;
+            overflow: visible !important;
+            white-space: pre-wrap !important;
+            word-break: break-word !important;
+        }
+        </style></head>""",
+        1,
+    )
+
+    _wb_result = None
+    if _save_ok:
+        _wb_result = {"ok": True, "updated": _save_mode == "updated"}
+    elif _action_error:
+        _wb_result = {"ok": False, "error": _action_error}
+    _wb_runtime = (
+        "<script>"
+        f"var WB_API_BASE={json.dumps(API_BASE)};"
+        f"var WB_API_KEY={json.dumps(API_KEY)};"
+        f"var WB_USER_ID={json.dumps(uid)};"
+        "var WB_SAVE_PORT=0;"
+        f"var WB_SAVE_RESULT={json.dumps(_wb_result, ensure_ascii=False)};"
+        "</script>"
+    )
+    html_content = html_content.replace("<head>", "<head>" + _wb_runtime, 1)
+
+    # Wipe gaps
+    html_content = html_content.replace("</style>", """
+    html, body { margin:0 !important; padding:0 !important; min-height:100vh !important; overflow-x:hidden; }
+    body::before, body::after { display:none !important; }
+    .study-stickers { display:none !important; }
+    .home-header { padding-top:0.25rem !important; }
+</style>""")
+
+    # Read real data from DB
+    init_memory_db()
+    conn = sqlite3.connect(MEMORY_DB)
+    c = conn.cursor()
+    c.execute("""SELECT id, subject, question, user_answer, correct_answer, explanation,
+                 error_count, status, created_at, images
+                 FROM user_wrong_questions WHERE user_id=?
+                 ORDER BY created_at DESC""", (uid,))
+    rows = c.fetchall()
+    conn.close()
+
+    import json as _json
+    data_js = []
+    for r in rows:
+        _qid, _subject, _question, _ua, _ca, _expl, _ec, _status, _created, _images = r
+        _date = (_created or "")[:10]
+        # 解析 images JSON 数组（base64 data URL 列表）
+        try:
+            _img_list = _json.loads(_images) if _images else []
+        except Exception:
+            _img_list = []
+        data_js.append({
+            "dbId": _qid,
+            "date": _date,
+            "subject": _subject or "其他",
+            "question": _collapse_math(_fix_latex(_question or "")),
+            "myAnswer": _collapse_math(_fix_latex(_ua or "")),
+            "correctAnswer": _collapse_math(_fix_latex(_ca or "")),
+            "explanation": _collapse_math(_fix_latex(_expl or "")),
+            "errorCount": _ec or 1,
+            "status": _status or "active",
+            "images": _img_list,
+        })
+
+    dummy_start = html_content.find("const wrongQuestionsRaw = [")
+    dummy_end = html_content.find("];", dummy_start) + 2
+    if dummy_start != -1 and dummy_end > dummy_start:
+        real_data_js = f"const wrongQuestionsRaw = {_json.dumps(data_js, ensure_ascii=False)};"
+        html_content = html_content[:dummy_start] + real_data_js + html_content[dummy_end:]
+
+    # 注入 API 配置，供 iframe 内 JS 直接调用 AI（绕过 textarea 桥接）
+    _wb_save_port = _start_wb_save_server()
+    html_content = html_content.replace("/*__API_CONFIG__*/",
+        f'var WB_API_BASE={_json.dumps(API_BASE)};var WB_API_KEY={_json.dumps(API_KEY)};'
+        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid or 0};')
+
+    # Inject AI result, extracted text & save status
+    if _ai_result:
+        _ai_ca = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("correctAnswer",""))))
+        _ai_ex = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("explanation",""))))
+        html_content += f"""<script>setTimeout(function(){{ setAiResult({_ai_ca},{_ai_ex}); }}, 300);</script>"""
+    if _extracted_text:
+        _ext_text = _json.dumps(_extracted_text)
+        html_content += f"""<script>setTimeout(function(){{ var q=document.getElementById('addQuestion'); q.value={_ext_text}; q.placeholder=''; updateQuestionPreview(); }}, 300);</script>"""
+    if _extract_error:
+        html_content += f"""<script>setTimeout(function(){{ alert({_json.dumps(_extract_error)}); }}, 350);</script>"""
+    if _save_ok:
+        _save_msg = "已更新这道错题，避免重复保存。" if _save_mode == "updated" else "已保存到错题本！"
+        html_content += f"""<script>setTimeout(function(){{ alert({_json.dumps(_save_msg)}); }}, 400);</script>"""
+    if _action_error:
+        html_content += f"""<script>setTimeout(function(){{ alert({_json.dumps(_action_error)}); }}, 400);</script>"""
+
+    # Auto-resize iframe
+    html_content += """
+    <script>
+    (function(){
+      var rt;
+      function rs(){
+        clearTimeout(rt);
+        rt = setTimeout(function(){
+          window.parent.postMessage({type:'streamlit:setFrameHeight', height: Math.max(document.body.scrollHeight, window.innerHeight)}, '*');
+        }, 100);
+      }
+      window.addEventListener('load', rs);
+      new MutationObserver(rs).observe(document.body, {childList:true, subtree:true, attributes:true});
+      setTimeout(rs,150); setTimeout(rs,500); setTimeout(rs,1000);
+    })();
+    </script>
+    """
+
+    st.components.v1.html(html_content, height=1000, scrolling=False)
+    st.stop()
+
 # ==================== 英语专家 ====================
 if st.session_state.page == "english":
     st.markdown("""
@@ -5438,12 +6513,32 @@ if st.session_state.page == "english":
                         method="POST")
                     with urllib.request.urlopen(req, timeout=120) as resp:
                         result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
-                    st.markdown("---")
-                    st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
-                    st.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:!1})}</script>")
                     log_visit("英语作文批改", f"{exam_type} {part_type}: {essay_topic or edited_text[:30]}")
+                    essay_q = f"{exam_type} {part_type} 作文"
+                    if essay_topic:
+                        essay_q += f"：{essay_topic}"
+                    st.session_state._english_essay_wb = {
+                        "question": essay_q,
+                        "correct": result,
+                        "user_answer": edited_text,
+                    }
                 except Exception as e:
                     st.error(f"批改失败: {e}")
+
+        essay_wb = st.session_state.get("_english_essay_wb")
+        if essay_wb:
+            st.markdown("---")
+            st.markdown(_escape_md(_collapse_math(_fix_latex(essay_wb["correct"]))))
+            st.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:!1})}</script>")
+            if st.button("加入错题本", key="essay_wb_add", use_container_width=True):
+                open_wrongbook_form(
+                    essay_wb["question"],
+                    essay_wb["correct"],
+                    essay_wb["user_answer"],
+                    "",
+                    "英语",
+                )
+                st.rerun()
 
     # ── 长难句解析 ──
     with tab_sentence:
@@ -5482,10 +6577,27 @@ if st.session_state.page == "english":
                         method="POST")
                     with urllib.request.urlopen(req, timeout=90) as resp:
                         result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
-                    st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("长难句解析", sentence_text[:40])
+                    st.session_state._english_sentence_wb = {
+                        "question": f"长难句解析：{sentence_text[:80]}...",
+                        "correct": result,
+                        "user_answer": "",
+                    }
                 except Exception as e:
                     st.error(f"解析失败: {e}")
+
+        sentence_wb = st.session_state.get("_english_sentence_wb")
+        if sentence_wb:
+            st.markdown(_escape_md(_collapse_math(_fix_latex(sentence_wb["correct"]))))
+            if st.button("加入错题本", key="sentence_wb_add", use_container_width=True):
+                open_wrongbook_form(
+                    sentence_wb["question"],
+                    sentence_wb["correct"],
+                    sentence_wb["user_answer"],
+                    "",
+                    "英语",
+                )
+                st.rerun()
 
     # ── 翻译与新题型 ──
     with tab_translate:
@@ -5527,10 +6639,27 @@ if st.session_state.page == "english":
                         method="POST")
                     with urllib.request.urlopen(req, timeout=90) as resp:
                         result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
-                    st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("英语翻译", f"{translate_mode}: {translate_text[:30]}")
+                    st.session_state._english_translate_wb = {
+                        "question": f"{translate_mode}：{translate_text[:80]}...",
+                        "correct": result,
+                        "user_answer": "",
+                    }
                 except Exception as e:
                     st.error(f"处理失败: {e}")
+
+        translate_wb = st.session_state.get("_english_translate_wb")
+        if translate_wb:
+            st.markdown(_escape_md(_collapse_math(_fix_latex(translate_wb["correct"]))))
+            if st.button("加入错题本", key="trans_wb_add", use_container_width=True):
+                open_wrongbook_form(
+                    translate_wb["question"],
+                    translate_wb["correct"],
+                    translate_wb["user_answer"],
+                    "",
+                    "英语",
+                )
+                st.rerun()
 
     # ── 单词记忆 ──
     with tab_vocab:
@@ -5568,10 +6697,27 @@ if st.session_state.page == "english":
                         method="POST")
                     with urllib.request.urlopen(req, timeout=60) as resp:
                         result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
-                    st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("英语单词记忆", vocab_input[:30])
+                    st.session_state._english_vocab_wb = {
+                        "question": f"单词记忆：{vocab_input}",
+                        "correct": result,
+                        "user_answer": "",
+                    }
                 except Exception as e:
                     st.error(f"查询失败: {e}")
+
+        vocab_wb = st.session_state.get("_english_vocab_wb")
+        if vocab_wb:
+            st.markdown(_escape_md(_collapse_math(_fix_latex(vocab_wb["correct"]))))
+            if st.button("加入错题本", key="vocab_wb_add", use_container_width=True):
+                open_wrongbook_form(
+                    vocab_wb["question"],
+                    vocab_wb["correct"],
+                    vocab_wb["user_answer"],
+                    "",
+                    "英语",
+                )
+                st.rerun()
 
     st.stop()
 
@@ -6101,6 +7247,7 @@ with mid_col:
             pass
 
     if submitted and (query or img_data):
+        st.session_state._last_question_image = img_data or ""
         add_thinking(f"查询: {query[:30]}..." if query else "图片识别...")
         results = search_corpus(query, corpus, top_k=3) if query else []
 
@@ -6110,36 +7257,34 @@ with mid_col:
         thinking_placeholder = st.empty()
         thinking_placeholder.markdown("<span style='color:#4f46e5;font-weight:600;'>AI 正在思考...</span>", unsafe_allow_html=True)
 
-        raw_full = ""
         output = None
         import time as _time
 
         for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data):
-            if event["type"] == "token":
-                raw_full += event["content"]
-            elif event["type"] == "done":
+            if event["type"] == "done":
                 output = event["result"]
 
         # 流结束后，打字效果显示 [ANSWER] 部分
         thinking_placeholder.empty()
         answer_text = ""
+        description_text = ""
         if output and output.get("answer"):
             answer_text = output["answer"]
-        elif raw_full:
-            # fallback: 从原始文本中提取
-            if "[ANSWER]" in raw_full:
-                answer_text = raw_full.split("[ANSWER]", 1)[1]
-                if "[KNOWLEDGE]" in answer_text:
-                    answer_text = answer_text.split("[KNOWLEDGE]")[0]
-            else:
-                answer_text = raw_full
+            description_text = output.get("description", "")
 
         if answer_text.strip():
+            if description_text.strip():
+                st.caption(f"题目说明：{description_text.strip()}")
             answer_placeholder = st.empty()
-            _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
+            _typing_display(answer_placeholder, _escape_md(_collapse_math(_prepare_math_for_display(answer_text.strip()))), delay=0.02)
             _katex_refresh()
             # 保存 answer_text，供 rerun 时重新渲染（如切标签页后 WebSocket 断连）
             st.session_state._last_answer_text = answer_text.strip()
+            st.session_state._last_question_description = description_text.strip()
+        else:
+            thinking_placeholder.markdown("（模型未返回最终答案，请重试）")
+            st.session_state._last_answer_text = ""
+            st.session_state._last_question_description = ""
         st.markdown('</div>', unsafe_allow_html=True)
         # 诊断：GLM 原始输出
         if output.get("_raw_debug"):
@@ -6179,8 +7324,11 @@ with mid_col:
         # 重新渲染上次回答（如切标签页 WebSocket 断连后 rerun，submitted=False 但答案仍在）
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
         st.markdown("### 💡 回答")
+        last_description = st.session_state.get("_last_question_description", "")
+        if last_description:
+            st.caption(f"题目说明：{last_description}")
         answer_placeholder = st.empty()
-        answer_placeholder.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._last_answer_text))))
+        answer_placeholder.markdown(_escape_md(_collapse_math(_prepare_math_for_display(st.session_state._last_answer_text))))
         _katex_refresh()
         st.markdown('</div>', unsafe_allow_html=True)
         last_results = st.session_state.get("_last_results", [])
@@ -6222,7 +7370,7 @@ with mid_col:
                 st.info("未匹配到相关知识点")
 
         st.markdown("### 这个回答对你有帮助吗？")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("掌握了", use_container_width=True):
                 last_results = st.session_state.get("_last_results", [])
@@ -6258,6 +7406,28 @@ with mid_col:
                 else:
                     st.session_state._action_msg = "未匹配到具体知识点"
                 log_visit("加入复习库", last_query[:50] if last_query else "")
+                st.rerun()
+        with col3:
+            if st.button("加入错题本", use_container_width=True):
+                # 尝试用 _parse_quiz_block 解析选择题格式，分离题干/选项和答案/解析
+                _raw_q = st.session_state.get("_last_query", "")
+                _parsed = _parse_quiz_block(_raw_q)
+                if _parsed:
+                    _wb_q = _parsed['full_question']
+                    _wb_c = _parsed['answer'] or ''
+                    if _parsed['explain']:
+                        _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
+                else:
+                    _wb_q = _raw_q
+                    _wb_c = st.session_state.get("_last_answer_text", "")
+                st.session_state._wb_form = True
+                st.session_state._wb_form_fresh = False
+                st.session_state._wb_question = _wb_q
+                st.session_state._wb_question_image = st.session_state.get("_last_question_image", "")
+                st.session_state._wb_correct = _wb_c
+                st.session_state._wb_user_answer = ""
+                st.session_state._wb_explanation = ""
+                st.session_state._wb_subject = "数学"; st.session_state.g_wb_subj = "数学"
                 st.rerun()
 
 # ==================== 底部Tab ====================
@@ -6496,8 +7666,13 @@ with tab2:
                         st.rerun()
 
             if st.session_state.get("_rev_quiz_id") == i:
-                quiz = st.session_state.pop("_rev_quiz", None)
-                st.session_state.pop("_rev_quiz_id", None)
+                # 加入错题本后清除题目数据（_wb_just_added 由 render_qa_cards 内按钮设置）
+                if st.session_state.pop("_wb_just_added", False):
+                    st.session_state.pop("_rev_quiz", None)
+                    st.session_state.pop("_rev_quiz_id", None)
+                    st.rerun()
+                # 用 get 不用 pop：保证 rerun 后 render_qa_cards 仍被调用，按钮点击事件不丢失
+                quiz = st.session_state.get("_rev_quiz")
                 if quiz and quiz.get("success"):
                     render_qa_cards(quiz['questions'], columns=1)
 

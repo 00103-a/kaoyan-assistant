@@ -28,3 +28,5 @@ temp/
 
 # 部署同步脚本
 copy_to_git.py
+docs/superpowers/plans/2026-07-13-wrongbook-latex-preview.md
+docs/superpowers/specs/2026-07-13-wrongbook-latex-preview-design.md

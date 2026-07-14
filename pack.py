@@ -23,7 +23,11 @@ for d in ["data/corpus", "data/corpus_demo", "data/katex", "skills", "templates"
     (PACK_DIR / d).mkdir(parents=True, exist_ok=True)
 
 print("[1/5] Copying core files...")
-core_files = ["app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "recommend.py", "requirements.txt", "SETUP.md", "DEPLOY.md", "preview_wrongbook.bak.html", "wrongbook_utils.py"]
+core_files = [
+    "app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "recommend.py",
+    "requirements.txt", "requirements_kb.txt", "SETUP.md", "SETUP_kb.md", "DEPLOY.md",
+    "app_kb.py", "preview_wrongbook.bak.html", "wrongbook_utils.py",
+]
 bat_files = ["启动.bat", "启动考研RAG_Streamlit.bat"]
 for f in core_files + bat_files:
     src = ROOT / f
@@ -44,6 +48,19 @@ for f in sorted(demo_corpus.iterdir()):
     if f.is_file():
         shutil.copy2(f, PACK_DIR / "data" / "corpus_demo" / f.name)
 print(f"    {count} docs + {len(list(demo_corpus.iterdir()))} demo docs copied")
+
+# 专业课识别作为可选扩展嵌入主站。目录不存在时保持上游原打包行为。
+for module_name in ("professional_knowledge", "repositories", "schemas", "services"):
+    source_dir = ROOT / module_name
+    if not source_dir.exists():
+        continue
+    shutil.copytree(
+        source_dir,
+        PACK_DIR / module_name,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+    print(f"    {module_name}/ extension copied")
 
 print("[3/5] Copying Skills...")
 skills_dir = ROOT / "skills"

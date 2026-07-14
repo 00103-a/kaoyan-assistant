@@ -21,6 +21,7 @@ from professional_knowledge.catalog import (
     list_enabled_subjects,
     list_rag_knowledge_bases,
     save_custom_subject_profile,
+    set_subject_enabled,
 )
 from professional_knowledge.wrong_question_ui import render_wrong_question_workspace
 from repositories.knowledge_repo import (
@@ -2182,9 +2183,14 @@ def _process_material_submission(
     processing_status = st.status(status_label, expanded=True)
     processing_progress = st.progress(0)
 
+    def update_pdf_text_progress(current, total, message):
+        progress_value = current / max(total, 1)
+        processing_progress.progress(min(progress_value * 0.25, 0.25))
+        processing_status.update(label=message, state="running")
+
     def update_ocr_progress(current, total, message):
         progress_value = current / max(total, 1)
-        processing_progress.progress(min(progress_value, 1.0))
+        processing_progress.progress(min(0.25 + progress_value * 0.75, 1.0))
         processing_status.update(label=message, state="running")
 
     try:
@@ -2200,6 +2206,7 @@ def _process_material_submission(
                     progress_callback=update_ocr_progress,
                 ),
                 pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
+                pdf_text_progress_fn=update_pdf_text_progress if file_type == "pdf" else None,
             )
     except Exception as exc:
         conn = sqlite3.connect(MEMORY_DB)
@@ -2415,10 +2422,15 @@ def _render_rag_knowledge_base_catalog():
     )
 
 
-def _render_subject_setup_wizard():
-    with st.expander("＋ 新建一门专业课知识库", expanded=False):
+def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_expander=True):
+    wrapper = (
+        st.expander("＋ 新建一门专业课知识库", expanded=False)
+        if wrap_expander
+        else st.container()
+    )
+    with wrapper:
         st.caption("只填专业课名称就能使用；考试代码、资料文件夹和抽取重点都可以留空，之后再补。")
-        with st.form("create_custom_subject_v1"):
+        with st.form(form_key):
             subject_label = st.text_input("专业课名称 *", placeholder="例如：管理学原理")
             exam_code = st.text_input("考试代码（可选）", placeholder="例如：803")
             local_root = st.text_input(
@@ -2440,6 +2452,8 @@ def _render_subject_setup_wizard():
             return
         existing_profile = get_rag_knowledge_base_by_subject(clean_label)
         if existing_profile is not None:
+            if not existing_profile.enabled:
+                set_subject_enabled(existing_profile.key, True)
             st.session_state["_pending_kb_subject"] = clean_label
             _queue_toast(f"“{clean_label}”已经存在，已为你选中")
             st.rerun()
@@ -2505,24 +2519,25 @@ def _update_knowledge_mastery(knowledge_id, mastery_state):
         conn.close()
 
 
-def render_knowledge_page():
+def _render_legacy_knowledge_page(*, show_header=True, show_subject_setup=True):
     """渲染专业课知识点识别系统：资料识别、确认入库、复习发散。"""
     user_id = st.session_state.get("user_id", 1)
     _ensure_session_draft_state()
     _ensure_persist_state()
     _show_pending_toast()
 
-    st.markdown(
-        """
-        <div class="main-title">
-            <h1>专业课知识点识别系统</h1>
-            <p>围绕专业课资料做“来源优先”的私有知识库：先识别和清洗资料，再确认知识点，最后回到原文依据做复习与检索。</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.expander("已配置的专业课（管理与扩展）", expanded=False):
-        _render_rag_knowledge_base_catalog()
+    if show_header:
+        st.markdown(
+            """
+            <div class="main-title">
+                <h1>专业课知识点识别系统</h1>
+                <p>围绕专业课资料做“来源优先”的私有知识库：先识别和清洗资料，再确认知识点，最后回到原文依据做复习与检索。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.expander("已配置的专业课（管理与扩展）", expanded=False):
+            _render_rag_knowledge_base_catalog()
 
     conn = sqlite3.connect(MEMORY_DB)
     try:
@@ -2549,7 +2564,8 @@ def render_knowledge_page():
     with tab_input:
         _render_stage_strip("1")
         _render_resume_material_panel(user_id)
-        _render_subject_setup_wizard()
+        if show_subject_setup:
+            _render_subject_setup_wizard()
         pending_subject = st.session_state.pop("_pending_kb_subject", None)
         if pending_subject in subjects_kb:
             st.session_state["kb_subject_v2"] = pending_subject
@@ -2858,3 +2874,431 @@ def render_knowledge_page():
             pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(path),
             pdf_ocr_available=is_rapid_ocr_available() or is_paddle_ocr_available(),
         )
+
+
+def _inject_professional_workbench_styles():
+    st.markdown(
+        """
+        <style>
+        .pk-workbench-title { margin: .1rem 0 .9rem; }
+        .pk-workbench-title h1 { margin: 0; color: #16181d; font-size: 1.75rem; letter-spacing: -.03em; }
+        .pk-workbench-title p { margin: .28rem 0 0; color: #667085; font-size: .9rem; }
+        .pk-workbench-label { color: #101828; font-size: .9rem; font-weight: 700; margin-bottom: .35rem; }
+        .pk-source-intro { padding: .9rem 1rem; border: 1px solid #dbe3ef; border-radius: 16px; background: #f8fbff; margin-bottom: .75rem; }
+        .pk-source-intro strong { display: block; color: #172033; font-size: .92rem; }
+        .pk-source-intro span { display: block; margin-top: .25rem; color: #667085; font-size: .78rem; line-height: 1.5; }
+        .pk-chat-hero { min-height: 210px; display: flex; flex-direction: column; justify-content: center; padding: 1.35rem 1.55rem; border: 1px solid #e2e7ef; border-radius: 18px; background: #fff; }
+        .pk-chat-hero .pk-book-mark { color: #6857a6; font-size: .78rem; font-weight: 700; margin-bottom: .65rem; }
+        .pk-chat-hero h2 { margin: 0; color: #17191f; font-size: 1.58rem; letter-spacing: -.025em; }
+        .pk-chat-hero p { margin: .58rem 0 0; color: #344054; line-height: 1.75; font-size: .91rem; max-width: 760px; }
+        .pk-source-count { color: #667085; font-size: .78rem; margin: .2rem 0 .7rem; }
+        div[data-testid="stVerticalBlockBorderWrapper"] { border-color: #e2e7ef; border-radius: 18px; box-shadow: none; }
+        div[data-testid="stChatMessage"] { border: 1px solid #e8ecf2; background: #fff; border-radius: 14px; padding: .15rem .35rem; }
+        button[kind="primary"], button[kind="primaryFormSubmit"] { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; }
+        button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover { background: #4338ca !important; border-color: #4338ca !important; }
+        input[type="checkbox"] { accent-color: #4f46e5; }
+        @media (max-width: 900px) {
+            .pk-chat-hero { min-height: auto; }
+            .pk-workbench-title h1 { font-size: 1.45rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _list_subject_sources(user_id, subject):
+    conn = sqlite3.connect(MEMORY_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_material_schema(conn)
+        rows = conn.execute(
+            """SELECT id, filename, chapter_name, processing_status, knowledge_count,
+                      source_type, process_method, extracted_text, confirmed_text,
+                      created_at, updated_at
+               FROM user_materials
+               WHERE user_id=? AND subject=?
+               ORDER BY COALESCE(updated_at, created_at) DESC, id DESC""",
+            (user_id, subject),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _auto_index_material(user_id, result):
+    material_result = result.get("material_result")
+    material_id = result.get("material_id")
+    if not material_result or not material_id:
+        return 0, [result.get("error") or "资料识别失败"]
+
+    text = (material_result.extracted_text or "").strip()
+    if not text:
+        return 0, list(material_result.warnings or []) + ["没有提取到可用文字。"]
+
+    subject = result.get("subject", "")
+    chapter_name = result.get("chapter_name", "")
+    profile = get_rag_knowledge_base_by_subject(subject)
+
+    def llm_callable(prompt):
+        if not os.environ.get("AI_API_KEY", "").strip():
+            raise RuntimeError("未配置 AI_API_KEY，使用本地规则整理")
+        return _call_llm_api(prompt, max_tokens=2600)
+
+    drafts, warnings = extract_knowledge_points_as_drafts(
+        text=text,
+        subject=subject,
+        chapter_name=chapter_name,
+        max_points=profile.max_points if profile else 12,
+        llm_callable=llm_callable,
+        extraction_guidance=profile.extraction_guidance if profile else "",
+    )
+    point_dicts = [knowledge_point_to_dict(point) for point in drafts]
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        save_confirmed_text(conn, material_id, text, status="text_confirmed")
+        saved_count = save_confirmed_knowledge_points(
+            conn,
+            user_id,
+            point_dicts,
+            material_meta={
+                "material_id": material_id,
+                "subject": subject,
+                "subject_key": profile.key if profile else "",
+                "chapter_name": chapter_name,
+                "source_type": material_result.source_type,
+                "process_method": material_result.process_method,
+                "material_filename": result.get("filename", ""),
+            },
+            strict=False,
+            finalize_material=bool(point_dicts),
+        )
+        save_workflow_snapshot(
+            conn,
+            material_id,
+            {"auto_indexed": True, "warnings": warnings, "knowledge_count": saved_count},
+            status="done" if point_dicts else "text_confirmed",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return saved_count, warnings
+
+
+def _process_workbench_uploads(user_id, subject, uploaded_files):
+    processed = 0
+    indexed = 0
+    warnings = []
+    for uploaded_file in list(uploaded_files or []):
+        result = _process_material_submission(
+            user_id=user_id,
+            subject=subject,
+            chapter_name=Path(uploaded_file.name).stem,
+            filename=uploaded_file.name,
+            file_bytes=uploaded_file.getvalue(),
+            open_preview=False,
+            rerun_on_complete=False,
+        )
+        if result.get("error"):
+            warnings.append(f"{uploaded_file.name}：{result['error']}")
+            continue
+        processed += 1
+        saved_count, item_warnings = _auto_index_material(user_id, result)
+        indexed += saved_count
+        warnings.extend(f"{uploaded_file.name}：{item}" for item in item_warnings[-2:])
+    return processed, indexed, warnings
+
+
+def _source_status_label(source):
+    status = source.get("processing_status") or "pending"
+    if status in {"done", "completed"}:
+        return f"已整理 · {source.get('knowledge_count') or 0} 个知识点"
+    if status == "failed":
+        return "识别失败"
+    if status == "text_confirmed":
+        return "文字已提取"
+    return "处理中"
+
+
+def _build_subject_overview(subject, sources):
+    if not sources:
+        return (
+            f"这是你的“{subject}”资料工作台。上传教材、讲义、真题或笔记后，"
+            "系统会自动提取文字、整理知识点，并让你直接基于全部来源提问。"
+        )
+    names = "、".join((item.get("chapter_name") or item.get("filename") or "未命名资料") for item in sources[:4])
+    tail = f"等 {len(sources)} 份资料" if len(sources) > 4 else f"共 {len(sources)} 份资料"
+    return (
+        f"当前工作台已汇集 {names}，{tail}。你可以勾选左侧来源控制回答范围，"
+        "再让 AI 归纳知识框架、比较概念、总结高频考点，或回到原文依据核对。"
+    )
+
+
+def _answer_subject_question(user_id, subject, source_ids, question):
+    if not source_ids:
+        return "请先在左侧至少勾选一份资料，再开始提问。"
+    placeholders = ",".join("?" for _ in source_ids)
+    conn = sqlite3.connect(MEMORY_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            f"""SELECT id, filename, chapter_name, confirmed_text, extracted_text
+                FROM user_materials
+                WHERE user_id=? AND subject=? AND id IN ({placeholders})""",
+            (user_id, subject, *source_ids),
+        ).fetchall()
+        knowledge_rows = conn.execute(
+            f"""SELECT material_id, knowledge_name, core_definition, source_text, content
+                FROM user_knowledge
+                WHERE user_id=? AND subject=? AND material_id IN ({placeholders})
+                ORDER BY material_id, id""",
+            (user_id, subject, *source_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    knowledge_by_material = {}
+    for knowledge_row in knowledge_rows:
+        knowledge_by_material.setdefault(knowledge_row["material_id"], []).append(
+            "\n".join(
+                part for part in (
+                    knowledge_row["knowledge_name"],
+                    knowledge_row["core_definition"],
+                    knowledge_row["source_text"],
+                    knowledge_row["content"],
+                ) if part
+            )
+        )
+
+    source_blocks = []
+    for index, row in enumerate(rows, start=1):
+        text = (row["confirmed_text"] or row["extracted_text"] or "").strip()
+        if not text:
+            text = "\n\n".join(knowledge_by_material.get(row["id"], []))
+        if text:
+            title = row["chapter_name"] or row["filename"] or f"来源{index}"
+            source_blocks.append(f"[来源{index}：{title}]\n{text[:6500]}")
+    if not source_blocks:
+        return "已选资料暂时没有可用文字，请在高级校对区检查识别结果。"
+
+    if not os.environ.get("AI_API_KEY", "").strip():
+        compact = "\n\n".join(source_blocks)
+        terms = [term for term in question.replace("？", " ").replace("，", " ").split() if len(term) >= 2]
+        matches = []
+        for paragraph in compact.split("\n"):
+            if any(term in paragraph for term in terms):
+                matches.append(paragraph.strip())
+            if len(matches) >= 5:
+                break
+        excerpt = "\n\n".join(matches) if matches else compact[:900]
+        return (
+            "当前未配置大模型 API Key，先为你返回资料中的直接相关片段：\n\n"
+            f"{excerpt}\n\n配置 AI_API_KEY 后，我可以进一步做跨来源归纳和带引用回答。"
+        )
+
+    prompt = f"""你是考研专业课资料助手。只能依据给定来源回答，不要编造。
+回答要求：先给结论，再分点解释；关键判断用[来源N]标注依据；来源不足时明确说不知道。
+
+专业课：{subject}
+用户问题：{question}
+
+资料来源：
+{chr(10).join(source_blocks)[:22000]}
+"""
+    try:
+        return _call_llm_api(prompt, max_tokens=1800)
+    except Exception as exc:
+        return f"暂时无法调用大模型：{exc}。资料已经保存，你可以稍后重试。"
+
+
+def _render_subject_management(selected_subject):
+    profile = get_rag_knowledge_base_by_subject(selected_subject)
+    with st.expander("＋ 新增 / 管理专业课", expanded=False):
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**新增专业课**")
+            _render_subject_setup_wizard(
+                form_key="create_custom_subject_workbench_v1",
+                wrap_expander=False,
+            )
+        with right:
+            st.markdown("**移除当前专业课**")
+            st.caption("移除后它不再出现在选择列表中；已上传资料和知识点会保留，可重新启用。")
+            if st.button("删除专业课", key="request_delete_subject_v1", use_container_width=True):
+                st.session_state["_pending_delete_subject_key"] = profile.key if profile else ""
+                st.rerun()
+            if st.session_state.get("_pending_delete_subject_key") == (profile.key if profile else None):
+                st.warning(f"确认移除“{selected_subject}”？此操作会隐藏该专业课，但不会删除已上传资料。")
+                confirmed = st.checkbox(
+                    f"我确认移除“{selected_subject}”",
+                    key=f"confirm_delete_subject_{profile.key if profile else 'unknown'}",
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(
+                        "确认删除专业课",
+                        key="confirm_delete_subject_action_v1",
+                        type="primary",
+                        disabled=not confirmed,
+                        use_container_width=True,
+                    ):
+                        set_subject_enabled(profile.key, False)
+                        st.session_state.pop("_pending_delete_subject_key", None)
+                        st.session_state.pop("pk_active_subject_v1", None)
+                        _queue_toast(f"已移除“{selected_subject}”")
+                        st.rerun()
+                with c2:
+                    if st.button("取消", key="cancel_delete_subject_v1", use_container_width=True):
+                        st.session_state.pop("_pending_delete_subject_key", None)
+                        st.rerun()
+
+
+def render_knowledge_page():
+    """Render the source-first professional course workbench."""
+    user_id = st.session_state.get("user_id", 1)
+    _ensure_session_draft_state()
+    _ensure_persist_state()
+    _show_pending_toast()
+    _inject_professional_workbench_styles()
+
+    st.markdown(
+        """
+        <div class="pk-workbench-title">
+            <h1>专业课资料工作台</h1>
+            <p>选择一门专业课，上传资料，然后直接基于来源提问。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    subjects = list_enabled_subjects()
+    pending_subject = st.session_state.pop("_pending_kb_subject", None)
+    if pending_subject in subjects:
+        st.session_state["pk_active_subject_v1"] = pending_subject
+
+    if not subjects:
+        st.info("还没有已配置的专业课。先创建一门专业课，再上传资料。")
+        _render_subject_setup_wizard(form_key="create_first_subject_workbench_v1")
+        return
+
+    if st.session_state.get("pk_active_subject_v1") not in subjects:
+        st.session_state["pk_active_subject_v1"] = subjects[0]
+    selected_subject = st.selectbox(
+        "专业课",
+        subjects,
+        key="pk_active_subject_v1",
+        help="408 和医学考研与其他专业课一样，都是可管理的配置项。",
+    )
+    _render_subject_management(selected_subject)
+
+    sources = _list_subject_sources(user_id, selected_subject)
+    source_column, chat_column = st.columns([0.37, 0.63], gap="medium")
+    selected_source_ids = []
+
+    with source_column:
+        with st.container(border=True):
+            st.markdown('<div class="pk-workbench-label">来源</div>', unsafe_allow_html=True)
+            st.markdown(
+                """
+                <div class="pk-source-intro">
+                    <strong>添加资料</strong>
+                    <span>支持 PDF、图片、TXT 和 Markdown。上传后自动完成文字提取与知识点整理。</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            with st.form("workbench_source_upload_v1", clear_on_submit=True):
+                uploaded_files = st.file_uploader(
+                    "上传资料",
+                    type=["pdf", "png", "jpg", "jpeg", "txt", "md"],
+                    accept_multiple_files=True,
+                    key="workbench_source_files_v1",
+                    label_visibility="collapsed",
+                )
+                submitted = st.form_submit_button("添加来源", type="primary", use_container_width=True)
+            if submitted:
+                if not uploaded_files:
+                    st.warning("请先选择资料文件。")
+                else:
+                    with st.spinner("正在识别并整理资料..."):
+                        processed, indexed, upload_warnings = _process_workbench_uploads(
+                            user_id, selected_subject, uploaded_files
+                        )
+                    if processed:
+                        _queue_toast(f"已添加 {processed} 份资料，整理出 {indexed} 个知识点")
+                    if upload_warnings:
+                        st.session_state["_workbench_upload_warnings"] = upload_warnings
+                    st.rerun()
+
+            st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源 · 默认全部参与回答</div>', unsafe_allow_html=True)
+            if not sources:
+                st.caption("上传第一份资料后，来源会显示在这里。")
+            for source in sources:
+                label = source.get("chapter_name") or source.get("filename") or "未命名资料"
+                checked = st.checkbox(
+                    label,
+                    value=True,
+                    key=f"workbench_source_selected_{source['id']}",
+                    help=f"{_source_status_label(source)} · {source.get('process_method') or '待识别处理方式'}",
+                )
+                st.caption(_source_status_label(source))
+                if checked:
+                    selected_source_ids.append(source["id"])
+            if st.session_state.get("_workbench_upload_warnings"):
+                with st.expander("查看本次整理提示", expanded=False):
+                    for warning in st.session_state.pop("_workbench_upload_warnings"):
+                        st.caption(warning)
+
+    with chat_column:
+        overview = _build_subject_overview(selected_subject, sources)
+        st.markdown(
+            f"""
+            <div class="pk-chat-hero">
+                <div class="pk-book-mark">资料对话</div>
+                <h2>{_escape_html(selected_subject)}</h2>
+                <p>{_escape_html(overview)}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        suggestion = None
+        st.markdown("**你可以这样问**")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            if st.button("梳理知识框架", use_container_width=True, key="pk_suggest_outline"):
+                suggestion = "请根据已选资料梳理完整的知识框架，并标出各部分之间的关系。"
+        with s2:
+            if st.button("总结高频考点", use_container_width=True, key="pk_suggest_exam"):
+                suggestion = "请总结已选资料中的高频考点、典型考法和容易混淆的地方。"
+        with s3:
+            if st.button("生成复习清单", use_container_width=True, key="pk_suggest_review"):
+                suggestion = "请基于已选资料生成一份由浅入深的复习清单。"
+
+        history_key = f"pk_chat_history_{user_id}_{selected_subject}"
+        history = st.session_state.setdefault(history_key, [])
+        for message in history[-8:]:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        with st.form("professional_source_chat_v1", clear_on_submit=True):
+            question = st.text_input(
+                "基于资料提问",
+                placeholder="例如：比较这几份资料对同一知识点的讲法",
+                label_visibility="collapsed",
+            )
+            ask_submitted = st.form_submit_button("发送", type="primary", use_container_width=True)
+        prompt = suggestion or (question.strip() if ask_submitted else "")
+        if prompt:
+            history.append({"role": "user", "content": prompt})
+            with st.spinner("正在阅读已选资料..."):
+                answer = _answer_subject_question(
+                    user_id, selected_subject, selected_source_ids, prompt
+                )
+            history.append({"role": "assistant", "content": answer})
+            st.rerun()
+
+    st.session_state["kb_subject_v2"] = selected_subject
+    with st.popover("高级校对与知识库工具（可选）", use_container_width=True):
+        st.caption("需要逐条修正文稿、维护知识点或使用错题本时，再进入这里。")
+        _render_legacy_knowledge_page(show_header=False, show_subject_setup=False)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from schemas.material_schema import MaterialResult
 from services.material_cleaner import clean_material_for_extraction
-from services.pdf_text_service import extract_pdf_text
+from services.pdf_text_service import extract_pdf_text, inspect_pdf_for_ocr
 from services.text_quality import analyze_text_quality, clean_material_text, merge_pdf_risk_into_quality
 
 
@@ -60,6 +60,7 @@ def route_material_input(
     image_ocr_fn=None,
     pdf_ocr_fn=None,
     pdf_ocr_available=False,
+    pdf_text_progress_fn=None,
 ):
     pasted_text = pasted_text or ""
     if pasted_text.strip():
@@ -93,7 +94,22 @@ def route_material_input(
         )
 
     if suffix == ".pdf" and file_path:
-        pdf_data = extract_pdf_text(file_path)
+        pdf_probe = inspect_pdf_for_ocr(file_path, progress_callback=pdf_text_progress_fn)
+        probe_quality = merge_pdf_risk_into_quality(
+            analyze_text_quality(
+                pdf_probe["text"],
+                page_count=max(pdf_probe.get("diagnostic_page_count") or len(pdf_probe.get("sampled_pages") or []), 1),
+                empty_page_count=pdf_probe["empty_page_count"],
+            ),
+            pdf_probe.get("pdf_diagnostics"),
+        )
+        should_skip_full_extract = bool(probe_quality.get("pdf_diagnostics", {}).get("needs_ocr"))
+
+        if should_skip_full_extract:
+            pdf_data = pdf_probe
+        else:
+            pdf_data = extract_pdf_text(file_path, progress_callback=pdf_text_progress_fn)
+
         quality = merge_pdf_risk_into_quality(
             analyze_text_quality(
             pdf_data["text"],

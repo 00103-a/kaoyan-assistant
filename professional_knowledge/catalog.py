@@ -282,13 +282,27 @@ def get_rag_knowledge_base_by_subject(
 
 
 def list_enabled_subjects(custom_config_path: str | Path | None = None) -> list[str]:
-    subjects = [
+    return list(dict.fromkeys(
         item.subject_label
         for item in list_rag_knowledge_bases(custom_config_path=custom_config_path)
         if item.enabled
-    ]
-    subjects.append("其他")
-    return list(dict.fromkeys(subjects))
+    ))
+
+
+def set_subject_enabled(
+    subject_key: str,
+    enabled: bool,
+    custom_config_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Enable or hide a configured subject without deleting its source data."""
+
+    profile = get_subject_profile(subject_key, custom_config_path=custom_config_path)
+    if profile is None:
+        raise ValueError(f"未找到专业课配置：{subject_key}")
+    return save_custom_subject_profile(
+        {"key": subject_key, "catalog": {"enabled": bool(enabled)}},
+        custom_config_path=custom_config_path,
+    )
 
 
 def save_custom_subject_profile(

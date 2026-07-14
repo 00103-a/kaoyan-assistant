@@ -64,7 +64,7 @@ def merge_pdf_risk_into_quality(quality, pdf_diagnostics=None):
     warnings = list(merged.get("warnings") or [])
 
     if pdf_diagnostics.get("needs_ocr"):
-        warnings.append("检测到图片主导且重复水印明显的 PDF，建议跳过文字层直提并直接 OCR。")
+        warnings.append("检测到图片主导或文字层质量较低的 PDF，建议跳过文字层直提并直接 OCR。")
         for reason in pdf_diagnostics.get("reasons") or []:
             warnings.append(f"PDF 检测：{reason}")
         merged["acceptable"] = False

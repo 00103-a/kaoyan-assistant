@@ -160,6 +160,25 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertEqual(subject_selector.value, "管理学原理")
         self.assertTrue(self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH.exists())
 
+    def test_configured_subject_can_be_removed_after_confirmation(self):
+        app = self._run_app()
+        subject_selector = _find_by_label(app.selectbox, "专业课")
+        self.assertIn("408综合", subject_selector.options)
+        self.assertIn("医学考研", subject_selector.options)
+
+        _find_by_label(app.button, "删除专业课").click().run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        _find_by_label(app.checkbox, "我确认移除“408综合”").set_value(True)
+        _find_by_label(app.button, "确认删除专业课").click().run()
+        if app.exception:
+            raise AssertionError(app.exception)
+
+        self.assertNotIn("408综合", _find_by_label(app.selectbox, "专业课").options)
+        disabled_profile = self.catalog.get_rag_knowledge_base_by_subject("408综合")
+        self.assertIsNotNone(disabled_profile)
+        self.assertFalse(disabled_profile.enabled)
+
     def test_partial_save_remains_resumable_with_remaining_draft(self):
         self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
             _ for _ in ()

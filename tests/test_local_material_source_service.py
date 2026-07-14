@@ -16,6 +16,7 @@ from professional_knowledge.catalog import (
     list_rag_knowledge_bases,
     save_custom_subject_profile,
 )
+import professional_knowledge.catalog as catalog_module
 from services.local_material_source_service import (
     get_local_material_root,
     get_local_material_source_for_subject,
@@ -25,6 +26,20 @@ from services.local_material_source_service import (
 
 
 class LocalMaterialSourceServiceTests(unittest.TestCase):
+    def setUp(self):
+        self._catalog_temp_dir = tempfile.TemporaryDirectory()
+        isolated_config = Path(self._catalog_temp_dir.name) / "custom_subjects.json"
+        self._catalog_config_patch = patch.object(
+            catalog_module,
+            "CUSTOM_SUBJECTS_CONFIG_PATH",
+            isolated_config,
+        )
+        self._catalog_config_patch.start()
+
+    def tearDown(self):
+        self._catalog_config_patch.stop()
+        self._catalog_temp_dir.cleanup()
+
     def test_default_profiles_keep_existing_subject_behavior_and_extraction_settings(self):
         profiles = {item.key: item for item in list_rag_knowledge_bases()}
 

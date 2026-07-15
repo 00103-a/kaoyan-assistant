@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ==================== 配置 ====================
-API_KEY = os.environ.get("AI_API_KEY", "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6")
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
 MEMORY_DB = "data/memory.db"

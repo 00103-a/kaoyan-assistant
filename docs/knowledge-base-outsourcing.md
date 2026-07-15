@@ -445,7 +445,7 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 > app.log
 ### 7.1 现有模块位置
 
 ```
-C:\Users\H.D.B\Desktop\claude-code-main\knowledge_base.py
+<项目目录>\knowledge_base.py
 ```
 
 ### 7.2 现有功能清单

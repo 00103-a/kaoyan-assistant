@@ -35,13 +35,15 @@ from wrongbook_utils import (
     split_wrongbook_answer_explanation,
 )
 
+load_dotenv(Path(__file__).with_name(".env"))
+
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
-API_BASE = "https://api.xiaomimimo.com/v1"
-MODEL_NAME = "mimo-v2.5"
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
+MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有
@@ -51,7 +53,7 @@ MATH3_ONLY = {"107", "110"}
 DATA_DIR = Path("data/corpus")
 DEMO_DATA_DIR = Path("data/corpus_demo")
 REFERENCE_DIR = Path("data/reference")
-MEMORY_DB = "data/memory.db"
+MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
 EXPERIENCE_FILE = "agent_experience.md"
 
 # ==================== CSS样式 ====================
@@ -109,6 +111,23 @@ st.markdown("""
        ═══════════════════════════════════════════ */
     * {
         font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+    }
+    /* Streamlit uses ligature text such as "check" and "close" to render icons.
+       Keep its icon font from being overwritten by the global Chinese font stack. */
+    [data-testid="stIconMaterial"],
+    .material-symbols-rounded {
+        font-family: "Material Symbols Rounded" !important;
+        font-weight: normal !important;
+        font-style: normal !important;
+        line-height: 1 !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        white-space: nowrap !important;
+        word-wrap: normal !important;
+        direction: ltr !important;
+        -webkit-font-feature-settings: "liga" !important;
+        font-feature-settings: "liga" !important;
+        -webkit-font-smoothing: antialiased !important;
     }
     h1, h2, h3, h4, h5, h6 {
         font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif !important;
@@ -225,6 +244,7 @@ st.markdown("""
 
     /* ── Button Press Animation ── */
     .st-key-nav_hub button:active, .st-key-nav_main button:active,
+    .st-key-nav_professional_kb button:active,
     .st-key-nav_english button:active, .st-key-nav_checkin button:active,
     .st-key-nav_popularity button:active, .st-key-nav_material button:active,
     .st-key-nav_suggest button:active,
@@ -240,6 +260,7 @@ st.markdown("""
     /* ── Colored dots for each nav button ── */
     .st-key-nav_hub button::before,
     .st-key-nav_main button::before,
+    .st-key-nav_professional_kb button::before,
     .st-key-nav_english button::before,
     .st-key-nav_checkin button::before,
     .st-key-nav_popularity button::before,
@@ -253,6 +274,7 @@ st.markdown("""
     }
     .st-key-nav_hub button::before        { background: #4f46e5; box-shadow: 0 0 6px rgba(79,70,229,0.4); }
     .st-key-nav_main button::before       { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
+    .st-key-nav_professional_kb button::before { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
     .st-key-nav_english button::before    { background: #059669; box-shadow: 0 0 6px rgba(5,150,105,0.4); }
     .st-key-nav_checkin button::before    { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,0.4); }
     .st-key-nav_popularity button::before { background: #db2777; box-shadow: 0 0 6px rgba(219,39,119,0.4); }
@@ -268,7 +290,7 @@ st.markdown("""
     }
 
     /* Sidebar buttons — match nav-item font + style */
-    .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_english button,
+    .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_professional_kb button, .st-key-nav_english button,
     .st-key-nav_checkin button, .st-key-nav_popularity button,
     .st-key-nav_material button, .st-key-nav_suggest button,
     .st-key-nav_wrongbook button {
@@ -283,6 +305,7 @@ st.markdown("""
         letter-spacing: 0.02em !important; font-size: 0.88rem !important;
     }
     .st-key-nav_hub button:hover, .st-key-nav_main button:hover,
+    .st-key-nav_professional_kb button:hover,
     .st-key-nav_english button:hover, .st-key-nav_checkin button:hover,
     .st-key-nav_popularity button:hover, .st-key-nav_material button:hover,
     .st-key-nav_suggest button:hover,
@@ -1310,6 +1333,10 @@ def init_memory_db():
     conn.close()
 
 import knowledge_base as kb
+try:
+    from professional_knowledge import render_professional_knowledge_system
+except Exception:
+    render_professional_knowledge_system = None
 
 @st.cache_resource
 def _start_wb_save_server():
@@ -4219,6 +4246,7 @@ with st.sidebar:
     _group1 = [
         ("hub",    "备考看板"),
         ("main",   "数学问答"),
+        ("professional_kb", "专业课"),
         ("english","英语专家"),
         ("checkin","打卡督学"),
     ]
@@ -4457,6 +4485,22 @@ if st.session_state.get("_wb_form"):
                 for k in ["_wb_form","_wb_question","_wb_question_image","_wb_correct","_wb_user_answer","_wb_explanation","_wb_subject","_wb_form_fresh","g_wb_q","g_wb_ca","g_wb_ex","g_wb_ua","g_wb_subj","g_wb_ai"]:
                     st.session_state.pop(k, None)
                 st.rerun()
+# ==================== 专业课 ====================
+if st.session_state.page == "professional_kb":
+    if st.button("← 返回首页", key="back_hub_professional_kb"):
+        st.session_state.page = "hub"
+        st.rerun()
+
+    if render_professional_knowledge_system is None:
+        st.error("专业课模块加载失败，请检查 professional_knowledge 模块是否存在。")
+        st.stop()
+
+    render_professional_knowledge_system(
+        user_id=st.session_state.get("user_id"),
+        username=st.session_state.get("username"),
+        standalone=False,
+    )
+    st.stop()
 
 # ==================== 数学问答 ====================
 if st.session_state.page == "main":
@@ -5825,7 +5869,7 @@ if st.session_state.page == "wrongbook":
             st.session_state["__wb_img_bridge__"] = ""
 
     st.text_area("img-bridge", key="__wb_img_bridge__", on_change=_on_img_bridge_change,
-                 label_visibility="collapsed", height=1)
+                 label_visibility="collapsed", height=68)
 
     # ── Action bridge：处理 AI 生成答案 & 保存错题（替代 history.replaceState + 按钮点击）──
     def _on_action_bridge_change():
@@ -6043,7 +6087,7 @@ if st.session_state.page == "wrongbook":
         st.session_state["__wb_action_bridge__"] = ""
 
     st.text_area("action-bridge", key="__wb_action_bridge__", on_change=_on_action_bridge_change,
-                 label_visibility="collapsed", height=1)
+                 label_visibility="collapsed", height=68)
 
     # ── 从 session_state 恢复结果（跨 rerun 持久化）──
     _ai_result = st.session_state.pop("_wb_ai_result", None)

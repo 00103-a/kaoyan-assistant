@@ -35,5 +35,5 @@
 
 ## 项目上下文
 
-完整架构文档在 `C:\Users\zy\kaoyan-assistant\CLAUDE.md`。
-Memory 记忆在 `C:\Users\zy\.claude\projects\C--Users-zy\memory\`。
+完整架构文档在项目根目录的 `CLAUDE.md`。
+本地开发记忆不属于仓库内容，不应写入个人电脑路径。

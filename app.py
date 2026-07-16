@@ -18,6 +18,7 @@ import urllib.error
 import re
 import traceback
 import secrets
+import hashlib
 import io
 import kaoyan_predict
 from recommend import generate_recommendation
@@ -792,37 +793,86 @@ def get_cookie_manager():
 
 cookie_manager = get_cookie_manager()
 
+AUTH_SESSION_DAYS = 30
+
 def generate_login_token():
-    """生成 64 字符随机 token"""
+    """生成仅保存在浏览器 Cookie 中的随机会话 token。"""
     return secrets.token_hex(32)
 
-def save_login_token(user_id, token):
-    """将 token 存入数据库"""
+
+def _token_digest(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_login_session(user_id, token):
+    """创建独立设备会话；数据库只保存 token 摘要。"""
+    now = datetime.now()
+    expires_at = now + timedelta(days=AUTH_SESSION_DAYS)
     conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("UPDATE users SET login_token=? WHERE id=?", (token, user_id))
+    conn.execute(
+        """INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at, last_seen_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (user_id, _token_digest(token), now.isoformat(sep=" "),
+         expires_at.isoformat(sep=" "), now.isoformat(sep=" ")),
+    )
     conn.commit()
     conn.close()
+
 
 def verify_login_token(token):
-    """验证 token，返回 user_id 或 None"""
-    if not token:
+    """验证未过期、未撤销的会话，返回所属用户而非前端声明的身份。"""
+    if not token or not isinstance(token, str):
         return None
     conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE login_token=?", (token,))
-    row = c.fetchone()
+    row = conn.execute(
+        """SELECT u.id, u.username
+           FROM auth_sessions s JOIN users u ON u.id=s.user_id
+           WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?
+           LIMIT 1""",
+        (_token_digest(token), datetime.now().isoformat(sep=" ")),
+    ).fetchone()
     conn.close()
-    if row:
-        return {"user_id": row[0], "username": row[1]}
-    return None
+    return {"user_id": row[0], "username": row[1]} if row else None
 
-def clear_login_token(user_id):
-    """清除数据库中的 token"""
+
+def revoke_login_session(token):
+    """只撤销当前设备会话，不影响同账号的其他设备。"""
+    if not token or not isinstance(token, str):
+        return
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE users SET login_token=NULL WHERE id=?", (user_id,))
+    conn.execute(
+        "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+        (datetime.now().isoformat(sep=" "), _token_digest(token)),
+    )
     conn.commit()
     conn.close()
+
+
+def clear_user_session_state():
+    """在登录切换、退出或会话失效时移除全部用户私有的页面状态。"""
+    for key in list(st.session_state.keys()):
+        if key != "cookie_manager":
+            del st.session_state[key]
+    st.session_state.logged_in = False
+    st.session_state.user_id = None
+    st.session_state.username = None
+    st.session_state.page = "hub"
+
+
+def set_authenticated_user(user_info):
+    """切换身份时先清理旧用户状态，再写入已验证的身份。"""
+    clear_user_session_state()
+    st.session_state.logged_in = True
+    st.session_state.user_id = user_info["user_id"]
+    st.session_state.username = user_info["username"]
+
+
+def require_authenticated_user_id():
+    """返回当前已验证用户；绝不把缺失身份回退到默认用户。"""
+    user_id = st.session_state.get("user_id")
+    if not st.session_state.get("logged_in") or not isinstance(user_id, int):
+        raise RuntimeError("未认证用户不能访问或写入用户数据")
+    return user_id
 
 # ==================== 核心功能 ====================
 
@@ -927,8 +977,6 @@ def get_knowledge_text(kid, corpus):
             return doc["text"]
     return ""
 
-import hashlib
-
 # ==================== 用户管理 ====================
 
 def hash_password(pw):
@@ -961,7 +1009,7 @@ def login_user(username, password):
     return row[0] if row else None
 
 def get_experience_file():
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     return Path(f"agent_experience_{uid}.md")
 
 def load_agent_experience():
@@ -1006,8 +1054,22 @@ def init_memory_db():
     try: c.execute("SELECT login_token FROM users LIMIT 1")
     except: c.execute("ALTER TABLE users ADD COLUMN login_token TEXT")
 
+    # 多设备独立会话。旧版 users.login_token 是单设备设计，升级时统一废弃。
+    c.execute("""CREATE TABLE IF NOT EXISTS auth_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        revoked_at TIMESTAMP,
+        last_seen_at TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)")
+    c.execute("UPDATE users SET login_token=NULL WHERE login_token IS NOT NULL")
+
     c.execute("""CREATE TABLE IF NOT EXISTS knowledge_mastery (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
         mastery_level REAL DEFAULT 0, status TEXT DEFAULT '陌生',
         times_correct INTEGER DEFAULT 0, times_wrong INTEGER DEFAULT 0,
         stability REAL DEFAULT 1.0, last_review TIMESTAMP,
@@ -1029,12 +1091,12 @@ def init_memory_db():
         c.execute("ALTER TABLE knowledge_mastery ADD COLUMN stability REAL DEFAULT 1.0")
 
     c.execute("""CREATE TABLE IF NOT EXISTS user_performance (
-        id INTEGER PRIMARY KEY, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
         knowledge_id TEXT, is_correct INTEGER, error_type TEXT,
         mastery_score REAL, created_at TIMESTAMP)""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS review_challenges (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
         challenge_type TEXT, completed INTEGER DEFAULT 0,
         created_at TIMESTAMP)""")
 
@@ -1310,62 +1372,6 @@ def init_memory_db():
     conn.close()
 
 import knowledge_base as kb
-
-@st.cache_resource
-def _start_wb_save_server():
-    """启动本地 HTTP 服务器接收错题保存请求（支持图片 base64，绕开 URL 长度限制）。
-    返回监听端口；启动失败返回 None。"""
-    import threading, json as _json_srv
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-    import os as _os
-
-    PORT = 8753
-    _DB_PATH = _os.path.abspath(MEMORY_DB)
-
-    class WBSaveHandler(BaseHTTPRequestHandler):
-        def _cors(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-        def do_OPTIONS(self):
-            self.send_response(204); self._cors(); self.end_headers()
-
-        def do_POST(self):
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                if length <= 0 or length > 24 * 1024 * 1024:
-                    return self._respond(413, {"success": False, "error": "图片数据过大，请减少图片数量后重试"})
-                body = self.rfile.read(length).decode("utf-8")
-                data = _json_srv.loads(body)
-                uid = data.get("user_id")
-                if not uid:
-                    return self._respond(400, {"success": False, "error": "未登录"})
-                conn = sqlite3.connect(_DB_PATH)
-                result = save_wrongbook_payload(conn, uid, data)
-                conn.close()
-                if result.get("ok"):
-                    self._respond(200, {"success": True, "updated": bool(result.get("updated"))})
-                else:
-                    self._respond(400, {"success": False, "error": result.get("error", "保存失败")})
-            except Exception as e:
-                self._respond(500, {"success": False, "error": str(e)})
-
-        def _respond(self, code, obj):
-            body = _json_srv.dumps(obj).encode("utf-8")
-            self.send_response(code); self._cors()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
-
-        def log_message(self, *a): pass
-
-    try:
-        srv = HTTPServer(("127.0.0.1", PORT), WBSaveHandler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        return PORT
-    except Exception:
-        return None
 
 
 def log_visit(action, detail=""):
@@ -1713,8 +1719,8 @@ def _save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resu
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
-             (count, material_id))
+    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=? AND user_id=?",
+             (count, material_id, user_id))
     conn.commit()
     conn.close()
     return count
@@ -2164,11 +2170,12 @@ def get_user_tasks(user_id):
     conn.close()
     return res
 
-def update_task_status(task_id, new_status):
+def update_task_status(user_id, task_id, new_status):
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     completed_at = datetime.now().strftime("%Y-%m-%d") if new_status == "completed" else None
-    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ?", (new_status, completed_at, task_id))
+    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ? AND user_id = ?",
+              (new_status, completed_at, task_id, user_id))
     conn.commit()
     conn.close()
 
@@ -2761,7 +2768,7 @@ PROBLEM_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心�
 
 def update_memory(kid, is_mastered, error_type="", mastery_score=0):
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT times_correct, times_wrong, stability FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (kid, uid))
@@ -2796,7 +2803,7 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
 
 def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
     """通用：将错题写入 user_wrong_questions 表"""
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     init_memory_db()
     payload = {
         "subject": subject,
@@ -2867,7 +2874,7 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     return _clean_extracted_question(question)
 
 def _record_qa_knowledge(docs):
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     try:
         init_memory_db()
         conn = sqlite3.connect(MEMORY_DB)
@@ -2883,7 +2890,7 @@ def _record_qa_knowledge(docs):
 
 def get_memory_stats():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM knowledge_mastery WHERE status='掌握' AND user_id=?", (uid,))
@@ -2897,7 +2904,7 @@ def get_memory_stats():
 
 def get_weak_points():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, times_wrong, times_correct, status, stability, error_type
@@ -2912,7 +2919,7 @@ def get_weak_points():
 
 def get_review_candidates():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, mastery_level, status, stability, last_review
@@ -2942,12 +2949,12 @@ def get_review_candidates():
     candidates.sort(key=lambda x: x["urgency"], reverse=True)
     return candidates[:10]
 
-def create_review_challenge(kid):
+def create_review_challenge(user_id, kid):
     init_memory_db()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("""INSERT INTO review_challenges (knowledge_id, challenge_type, created_at)
-        VALUES (?, '自动复习', ?)""", (kid, datetime.now()))
+    c.execute("""INSERT INTO review_challenges (knowledge_id, user_id, challenge_type, created_at)
+        VALUES (?, ?, '自动复习', ?)""", (kid, user_id, datetime.now()))
     conn.commit()
     conn.close()
 
@@ -4085,16 +4092,21 @@ if "page" not in st.session_state:
 # 确保数据库表存在（登录前就必须建好）
 init_memory_db()
 
-# 自动登录（CookieManager 方案）
-if not st.session_state.logged_in:
-    token = cookie_manager.get("auth_token")
+# 每次 rerun 都以 Cookie 会话为准，不能信任可能残留的 session_state 身份。
+token = cookie_manager.get("auth_token")
+user_info = verify_login_token(token)
+session_user_id = st.session_state.get("user_id")
+if user_info:
+    if (not st.session_state.get("logged_in")
+            or session_user_id != user_info["user_id"]
+            or st.session_state.get("username") != user_info["username"]):
+        set_authenticated_user(user_info)
+        st.rerun()
+elif st.session_state.get("logged_in") or session_user_id is not None:
+    clear_user_session_state()
     if token:
-        user_info = verify_login_token(token)
-        if user_info:
-            st.session_state.logged_in = True
-            st.session_state.user_id = user_info["user_id"]
-            st.session_state.username = user_info["username"]
-            st.rerun()
+        cookie_manager.delete("auth_token")
+    st.rerun()
 
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
@@ -4120,11 +4132,9 @@ if not st.session_state.logged_in:
                 uid = login_user(username, password)
                 if uid:
                     token = generate_login_token()
-                    save_login_token(uid, token)
-                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = uid
-                    st.session_state.username = username
+                    create_login_session(uid, token)
+                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
+                    set_authenticated_user({"user_id": uid, "username": username})
                     st.success("登录成功！")
                     st.rerun()
                 else:
@@ -4145,11 +4155,9 @@ if not st.session_state.logged_in:
                     uid = register_user(new_user, new_pass)
                     if uid:
                         token = generate_login_token()
-                        save_login_token(uid, token)
-                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = uid
-                        st.session_state.username = new_user
+                        create_login_session(uid, token)
+                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
+                        set_authenticated_user({"user_id": uid, "username": new_user})
                         st.success(f"注册成功！欢迎 {new_user}")
                         st.rerun()
                     else:
@@ -4275,11 +4283,9 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     if st.button("退出登录", key="sidebar_logout", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
+        revoke_login_session(cookie_manager.get("auth_token"))
         cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        clear_user_session_state()
         st.rerun()
 
 # ==================== 全局：加入错题本表单 ====================
@@ -4914,7 +4920,7 @@ if st.session_state.page == "main":
                                         q_raw = quiz['questions']
                                         qm = re.search(r'Q:\s*(.+)', q_raw)
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
-                                        save_feynman_record(st.session_state.get("user_id", 1), "problem", display_q, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_authenticated_user_id(), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
                                         st.session_state._kb_quiz = None
                                         st.rerun()
@@ -4963,7 +4969,7 @@ if st.session_state.page == "main":
                                         if m: se = int(m.group(1))
                                         m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
                                         if m: sa = int(m.group(1))
-                                        save_feynman_record(st.session_state.get("user_id", 1), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_authenticated_user_id(), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
                                         st.session_state._kb_concept_result = result
                                         st.rerun()
                                     except Exception as e:
@@ -5096,7 +5102,7 @@ if st.session_state.page == "main":
                             if m: score_authentic = int(m.group(1))
 
                             save_feynman_record(
-                                st.session_state.get("user_id", 1),
+                                require_authenticated_user_id(),
                                 mode_key, _ftopic, _fanswer, result,
                                 score_correct, score_expression, score_authentic, total_score)
 
@@ -5108,7 +5114,7 @@ if st.session_state.page == "main":
 
             st.markdown("---")
             st.markdown("### 历史记录")
-            feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
+            feynman_history = get_feynman_history(require_authenticated_user_id())
             if feynman_history:
                 for record in feynman_history:
                     mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -5552,7 +5558,7 @@ if st.session_state.page == "popularity":
         st.markdown("---")
         st.markdown("### 💡 个人建议")
 
-        uid = st.session_state.get("user_id", 1)
+        uid = require_authenticated_user_id()
         profile = get_user_profile(uid)
 
         if not profile:
@@ -5788,7 +5794,7 @@ if st.session_state.page == "suggest":
 # ==================== 错题本 ====================
 if st.session_state.page == "wrongbook":
     from pathlib import Path as _Path
-    uid = st.session_state.get("user_id")
+    uid = require_authenticated_user_id()
 
     # ── 卡片删除桥接（v2：预渲染隐藏按钮）──
     # 详情见下方 — 每个错题预渲染 st.button(key="wb_iframe_del_<id>")，iframe JS 通过 CSS class 定位点击。
@@ -5836,7 +5842,35 @@ if st.session_state.page == "wrongbook":
             import json as _json3
             _action = _json3.loads(_raw)
             _act = _action.get("action", "")
-            if _act == "ai_generate":
+            if _act == "chat":
+                _question = str(_action.get("question", ""))[:6000]
+                _correct = str(_action.get("correctAnswer", ""))[:6000]
+                _explanation = str(_action.get("explanation", ""))[:8000]
+                _message = str(_action.get("message", ""))[:3000]
+                _image = _action.get("image")
+                if not _question or not (_message or _image):
+                    st.session_state["_wb_action_error"] = "追问内容不能为空"
+                else:
+                    _chat_prompt = f"""你是考研错题辅导助教。只回答学生的当前追问，不要输出思维链、提示词或内部分析。
+
+【题目】
+{_question}
+
+【正确答案】
+{_correct}
+
+【已有解析】
+{_explanation}
+
+【学生追问】
+{_message or '请分析这张图片'}"""
+                    _reply = call_llm_api(_chat_prompt, temperature=0.3,
+                                          image_base64=_image if isinstance(_image, str) and _image.startswith("data:image/") else None)
+                    st.session_state["_wb_chat_result"] = {
+                        "message": _message or "（图片追问）",
+                        "reply": _clean_mimo_output(_reply, _chat_prompt),
+                    }
+            elif _act == "ai_generate":
                 _ai_q = _action.get("question", "")
                 _ai_subj = _action.get("subject", "高数")
                 _ai_my = _action.get("myAnswer", "")
@@ -6050,6 +6084,7 @@ if st.session_state.page == "wrongbook":
     _save_ok = st.session_state.pop("_wb_save_ok", False)
     _save_mode = st.session_state.pop("_wb_save_mode", "inserted")
     _action_error = st.session_state.pop("_wb_action_error", "")
+    _chat_result = st.session_state.pop("_wb_chat_result", None)
 
     # Exit button: return to 考研助手 main hub
     c_exit, c_title = st.columns([1, 10])
@@ -6148,10 +6183,6 @@ if st.session_state.page == "wrongbook":
         _wb_result = {"ok": False, "error": _action_error}
     _wb_runtime = (
         "<script>"
-        f"var WB_API_BASE={json.dumps(API_BASE)};"
-        f"var WB_API_KEY={json.dumps(API_KEY)};"
-        f"var WB_USER_ID={json.dumps(uid)};"
-        "var WB_SAVE_PORT=0;"
         f"var WB_SAVE_RESULT={json.dumps(_wb_result, ensure_ascii=False)};"
         "</script>"
     )
@@ -6205,17 +6236,18 @@ if st.session_state.page == "wrongbook":
         real_data_js = f"const wrongQuestionsRaw = {_json.dumps(data_js, ensure_ascii=False)};"
         html_content = html_content[:dummy_start] + real_data_js + html_content[dummy_end:]
 
-    # 注入 API 配置，供 iframe 内 JS 直接调用 AI（绕过 textarea 桥接）
-    _wb_save_port = _start_wb_save_server()
-    html_content = html_content.replace("/*__API_CONFIG__*/",
-        f'var WB_API_BASE={_json.dumps(API_BASE)};var WB_API_KEY={_json.dumps(API_KEY)};'
-        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid or 0};')
+    # 旧模板占位符保留为空：API Key、保存端口和用户 ID 均不得下发至浏览器。
+    html_content = html_content.replace("/*__API_CONFIG__*/", "")
 
     # Inject AI result, extracted text & save status
     if _ai_result:
         _ai_ca = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("correctAnswer",""))))
         _ai_ex = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("explanation",""))))
         html_content += f"""<script>setTimeout(function(){{ setAiResult({_ai_ca},{_ai_ex}); }}, 300);</script>"""
+    if _chat_result:
+        _chat_message = _json.dumps(_chat_result.get("message", ""))
+        _chat_reply = _json.dumps(_chat_result.get("reply", ""))
+        html_content += f"""<script>setTimeout(function(){{ setChatResult({_chat_message},{_chat_reply}); }}, 300);</script>"""
     if _extracted_text:
         _ext_text = _json.dumps(_extracted_text)
         html_content += f"""<script>setTimeout(function(){{ var q=document.getElementById('addQuestion'); q.value={_ext_text}; q.placeholder=''; updateQuestionPreview(); }}, 300);</script>"""
@@ -7185,11 +7217,9 @@ with left_col:
     st.markdown("### 👤 当前用户")
     st.markdown(f"**{st.session_state.get('username','?')}**")
     if st.button("🚪 退出登录", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
+        revoke_login_session(cookie_manager.get("auth_token"))
         cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        clear_user_session_state()
         st.rerun()
 
     st.markdown("---")
@@ -7397,7 +7427,7 @@ with mid_col:
                     # 立即验证 DB 写入
                     vconn = sqlite3.connect(MEMORY_DB)
                     vc = vconn.cursor()
-                    uid = st.session_state.get("user_id", 1)
+                    uid = require_authenticated_user_id()
                     vc.execute("SELECT knowledge_id, status FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (matched[0], uid))
                     verify = vc.fetchone()
                     vconn.close()
@@ -7790,7 +7820,7 @@ with tab4:
     # 历史记录
     st.markdown("---")
     st.markdown("### 📜 历史记录")
-    feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
+    feynman_history = get_feynman_history(require_authenticated_user_id())
     if feynman_history:
         for record in feynman_history:
             mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -7809,7 +7839,7 @@ with tab3:
     st.subheader("知识点掌握情况")
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (st.session_state.get("user_id", 1),))
+    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (require_authenticated_user_id(),))
     rows = c.fetchall()
     conn.close()
     filtered_rows = [r for r in rows if r[0] in filtered_corpus_ids]

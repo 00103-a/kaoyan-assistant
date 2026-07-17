@@ -2671,6 +2671,32 @@ function handleChatImage() {
   reader.readAsDataURL(file);
 }
 
+// All iframe actions are routed through the authenticated Streamlit session.
+// The browser never receives an API key or an authoritative user id.
+function sendToStreamlitAction(action) {
+  try {
+    var bridge = window.parent.document.querySelector('.st-key-__wb_action_bridge__ textarea');
+    if (!bridge) return false;
+    var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(bridge, JSON.stringify(action));
+    bridge.dispatchEvent(new Event('input', { bubbles: true }));
+    bridge.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  } catch (e) { return false; }
+}
+
+function sendToStreamlitImage(imageData) {
+  try {
+    var bridge = window.parent.document.querySelector('.st-key-__wb_img_bridge__ textarea');
+    if (!bridge) return false;
+    var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(bridge, imageData);
+    bridge.dispatchEvent(new Event('input', { bubbles: true }));
+    bridge.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  } catch (e) { return false; }
+}
+
 async function sendChatMessage() {
   if (chatLoading) return;
   const input = document.getElementById('chatInput');
@@ -2687,6 +2713,21 @@ async function sendChatMessage() {
   input.value = '';
   chatLoading = true;
   document.getElementById('chatSendBtn').disabled = true;
+
+  if (!sendToStreamlitAction({
+    action: 'chat',
+    question: currentReviewQ ? currentReviewQ.question : '',
+    correctAnswer: currentReviewQ ? currentReviewQ.correctAnswer : '',
+    explanation: currentReviewQ ? currentReviewQ.explanation : '',
+    message: text,
+    image: chatImageBase64 || ''
+  })) {
+    chatLoading = false;
+    document.getElementById('chatSendBtn').disabled = false;
+    addChatMessage('system', '追问通道不可用，请刷新后重试。');
+  }
+  clearImageTag();
+  return;
 
   // Build AI prompt — 根据简洁模式开关决定
   const subj = currentReviewQ ? (currentReviewQ.subject || '') : '';
@@ -2744,9 +2785,9 @@ async function sendChatMessage() {
   }
 
   try {
-    const resp = await fetch(WB_API_BASE + '/chat/completions', {
+    const resp = await fetch('/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + WB_API_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'mimo-v2.5',
         messages: [
@@ -3349,17 +3390,21 @@ function aiExtractQuestion() {
     var compressed = canvas.toDataURL('image/jpeg', 0.7);
 
     var qEl = document.getElementById('addQuestion');
+    if (!sendToStreamlitImage(compressed) && !qEl.value.trim()) {
+      qEl.placeholder = '图片识别通道不可用，请刷新后重试';
+    }
+    return;
     qEl.placeholder = 'AI 正在识别图片中的题目...';
 
     // 直接在 iframe 内调用 AI API，不依赖 Streamlit textarea 桥接
-    if (typeof WB_API_BASE === 'undefined') {
+    if (false) {
       qEl.placeholder = 'API 配置缺失，请手动输入题目';
       alert('图片识别失败：API 配置缺失。请手动输入题目。');
       return;
     }
     var requestOptions = {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + WB_API_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'mimo-v2.5',
         messages: [{ role: 'user', content: [
@@ -3370,7 +3415,7 @@ function aiExtractQuestion() {
       })
     };
     if (ocrAbortController) requestOptions.signal = ocrAbortController.signal;
-    fetch(WB_API_BASE + '/chat/completions', requestOptions).then(function(r) {
+    fetch('/chat/completions', requestOptions).then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function(data) {
@@ -3470,10 +3515,19 @@ function aiGenerateAnswer() {
   btn.textContent = '✨ AI 生成中...';
   btn.disabled = true;
 
+  if (!sendToStreamlitAction({
+    action: 'ai_generate', question: question, subject: subject, myAnswer: myAnswer
+  })) {
+    btn.textContent = origText;
+    btn.disabled = false;
+    alert('AI 生成通道不可用，请刷新后重试。');
+  }
+  return;
+
   // 直接在 iframe 内调用 AI API
-  fetch(WB_API_BASE + '/chat/completions', {
+  fetch('/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + WB_API_KEY },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'mimo-v2.5',
       messages: [
@@ -3552,11 +3606,14 @@ function saveNewQuestion() {
   };
 
   // 图片走 POST 请求体，不进入 Streamlit widget/URL，避免大 Base64 撑爆状态消息。
-  if (WB_SAVE_PORT && WB_USER_ID) {
-    fetch('http://127.0.0.1:' + WB_SAVE_PORT + '/wb_save', {
+  _saveTextViaBridge(payload, btn, originalText);
+  return;
+
+  if (false) {
+    fetch('/wb_save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ user_id: WB_USER_ID }, payload))
+      body: JSON.stringify(payload)
     }).then(function(r) {
       return r.json().then(function(data) {
         if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
@@ -3593,7 +3650,6 @@ function saveNewQuestion() {
 }
 
 function _saveTextViaBridge(payload, btn, originalText) {
-  payload.images = [];
   var bridgePayload = JSON.stringify({ action: 'save', payload: payload });
   try {
     var bridge = window.parent.document.querySelector('.st-key-__wb_action_bridge__ textarea');
@@ -3647,6 +3703,24 @@ function setAiResult(correctAnswer, explanation) {
   if (typeof renderMathInElement !== 'undefined') {
     setTimeout(function() {
       renderMathInElement(document.getElementById('aiResultSection'), {
+        delimiters: [{left:'$$', right:'$$', display:true},{left:'$', right:'$', display:false}],
+        throwOnError: false, strict: false
+      });
+    }, 100);
+  }
+}
+
+function setChatResult(message, reply) {
+  var loadingEl = document.getElementById('chatLoadingMsg');
+  if (loadingEl) loadingEl.remove();
+  addChatMessage('user', message || '（图片追问）');
+  addChatMessage('ai', reply || 'AI 暂时无法回复，请稍后重试。');
+  chatLoading = false;
+  var sendBtn = document.getElementById('chatSendBtn');
+  if (sendBtn) sendBtn.disabled = false;
+  if (typeof renderMathInElement !== 'undefined') {
+    setTimeout(function() {
+      renderMathInElement(document.getElementById('chatMessages'), {
         delimiters: [{left:'$$', right:'$$', display:true},{left:'$', right:'$', display:false}],
         throwOnError: false, strict: false
       });

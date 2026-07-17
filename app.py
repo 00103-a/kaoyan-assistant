@@ -41,7 +41,7 @@ load_dotenv(Path(__file__).with_name(".env"))
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = os.environ.get("AI_API_KEY", "").strip()
+API_KEY = os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
@@ -400,6 +400,10 @@ st.markdown("""
     .feature-card:nth-child(2) { animation-delay: 0.12s, 0.12s; }
     .feature-card:nth-child(3) { animation-delay: 0.19s, 0.19s; }
     .feature-card:nth-child(4) { animation-delay: 0.26s, 0.26s; }
+    .feature-card:nth-child(5) { animation-delay: 0.33s, 0.33s; }
+    .feature-card:nth-child(6) { animation-delay: 0.40s, 0.40s; }
+    .feature-card:nth-child(7) { animation-delay: 0.47s, 0.47s; }
+    .feature-card:nth-child(8) { animation-delay: 0.54s, 0.54s; }
 
     /* QA card — smooth rise */
     .qa-card {
@@ -506,6 +510,19 @@ st.markdown("""
         display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px;
         position: relative; z-index: 1;
     }
+    /* ── Hub Card Grid (equal-height row) ── */
+    .hub-card-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1rem;
+        margin-bottom: 0.3rem;
+    }
+    @media (max-width: 768px) {
+        .hub-card-row { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 480px) {
+        .hub-card-row { grid-template-columns: 1fr; }
+    }
     .feature-card .card-tag {
         font-size: 0.68rem; padding: 3px 9px;
         background: rgba(241,245,249,0.8); color: #6366f1;
@@ -519,6 +536,8 @@ st.markdown("""
     .icon-fb   { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); color: #0284c7; }
     .icon-mat  { background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%); color: #ca8a04; }
     .icon-ck   { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); color: #16a34a; }
+    .icon-pro  { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); color: #7c3aed; }
+    .icon-wb   { background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%); color: #e11d48; }
 
     /* ── Card Breathing Animation ── */
     @keyframes cardBreathe {
@@ -600,6 +619,7 @@ st.markdown("""
     button[kind="primary"], .st-key-hub_qa button, .st-key-hub_pop button,
     .st-key-hub_english button, .st-key-hub_suggest button,
     .st-key-hub_material button, .st-key-hub_checkin button,
+    .st-key-hub_professional_kb button, .st-key-hub_wrongbook button,
     button[data-testid="baseButton-primary"],
     div[data-testid="stButton"] button[kind="primary"] {
         background: #2563eb !important; color: #ffffff !important;
@@ -5316,8 +5336,6 @@ if st.session_state.page == "hub":
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Row 2: 4 Feature Cards ──
-    fc1, fc2, fc3, fc4 = st.columns(4)
-
     _card_data = [
         ("math", "icon-math", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>""",
          "数学问答", "110 个知识点 · 智能问答 · 遗忘曲线复习",
@@ -5333,59 +5351,63 @@ if st.session_state.page == "hub":
          ["需求", "反馈"], "suggest"),
     ]
 
-    for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
+    _row2_html = ""
+    for key, icon_cls, icon_svg, title, desc, tags, target in _card_data:
+        tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
+        _row2_html += f"""
+        <div class="feature-card">
+            <div class="card-icon {icon_cls}">{icon_svg}</div>
+            <div class="card-title">{title}</div>
+            <div class="card-desc">{desc}</div>
+            {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
+        </div>"""
+    st.markdown(f'<div class="hub-card-row">{_row2_html}</div>', unsafe_allow_html=True)
+
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    for col, (key, _, _, _, _, _, target) in zip(
         [fc1, fc2, fc3, fc4], _card_data
     ):
         with col:
-            tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
-            st.markdown(f"""
-            <div class="feature-card">
-                <div class="card-icon {icon_cls}">{icon_svg}</div>
-                <div class="card-title">{title}</div>
-                <div class="card-desc">{desc}</div>
-                {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
-            </div>
-            """, unsafe_allow_html=True)
             if st.button("进入", key=f"hub_{key}", use_container_width=True):
                 st.session_state.page = target
                 st.rerun()
 
-    # ── Row 3: 2 Wide Cards ──
-    wc1, wc2 = st.columns(2)
+    # ── Row 3: 4 Feature Cards ──
+    _card_data2 = [
+        ("material", "icon-mat", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>""",
+         "学习资料生成", "AI 生成习题册 · 知识点整理 · 模考卷 · DOCX 导出",
+         ["习题生成", "模考卷", "知识点", "DOCX"], "material"),
+        ("checkin", "icon-ck", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>""",
+         "打卡督学", "每日打卡 · 学习计划 · 番茄计时 · 学习画像",
+         ["打卡", "番茄钟", "日记", "画像"], "checkin"),
+        ("professional_kb", "icon-pro", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>""",
+         "专业课", "专业知识库 · OCR 识别 · 智能出题 · 向量检索",
+         ["知识库", "OCR", "出题", "检索"], "professional_kb"),
+        ("wrongbook", "icon-wb", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>""",
+         "错题本", "错题收集 · 分类管理 · AI 解析 · 针对性复习",
+         ["错题", "AI解析", "分类", "复习"], "wrongbook"),
+    ]
 
-    with wc1:
-        st.markdown("""
-        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
-            <div class="card-icon icon-mat" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
-            <div style="flex:1;">
-                <div class="card-title">学习资料生成</div>
-                <div class="card-desc">AI 生成习题册 · 知识点整理 · DOCX 导出</div>
-                <div class="card-tags" style="margin-top:6px;">
-                    <span class="card-tag">习题生成</span><span class="card-tag">模考卷</span><span class="card-tag">DOCX</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("进入", key="hub_material", use_container_width=True):
-            st.session_state.page = "material"
-            st.rerun()
+    _row3_html = ""
+    for key, icon_cls, icon_svg, title, desc, tags, target in _card_data2:
+        tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
+        _row3_html += f"""
+        <div class="feature-card">
+            <div class="card-icon {icon_cls}">{icon_svg}</div>
+            <div class="card-title">{title}</div>
+            <div class="card-desc">{desc}</div>
+            {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
+        </div>"""
+    st.markdown(f'<div class="hub-card-row">{_row3_html}</div>', unsafe_allow_html=True)
 
-    with wc2:
-        st.markdown("""
-        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
-            <div class="card-icon icon-ck" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
-            <div style="flex:1;">
-                <div class="card-title">打卡督学</div>
-                <div class="card-desc">每日打卡 · 学习计划 · 学习日记 · 番茄计时 · 学习画像</div>
-                <div class="card-tags" style="margin-top:6px;">
-                    <span class="card-tag">打卡</span><span class="card-tag">番茄钟</span><span class="card-tag">日记</span><span class="card-tag">画像</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("进入", key="hub_checkin", use_container_width=True):
-            st.session_state.page = "checkin"
-            st.rerun()
+    wc1, wc2, wc3, wc4 = st.columns(4)
+    for col, (key, _, _, _, _, _, target) in zip(
+        [wc1, wc2, wc3, wc4], _card_data2
+    ):
+        with col:
+            if st.button("进入", key=f"hub_{key}", use_container_width=True):
+                st.session_state.page = target
+                st.rerun()
 
     st.stop()
 

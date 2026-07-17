@@ -40,7 +40,7 @@ from repositories.material_repo import (
     save_extraction_result,
     save_workflow_snapshot,
 )
-from repositories.wrong_question_repo import count_user_wrong_questions
+from repositories.wrong_question_repo import bulk_create_wrong_questions, count_user_wrong_questions
 from schemas.knowledge_schema import (
     has_meaningful_knowledge_content,
     knowledge_point_to_dict,
@@ -79,7 +79,7 @@ from services.professional_knowledge_task_service import (
 
 # ==================== 配置（从环境变量读取） ====================
 MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
-API_KEY = os.environ.get("AI_API_KEY", "")
+API_KEY = os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
@@ -2993,6 +2993,44 @@ def _list_subject_sources(user_id, subject):
         conn.close()
 
 
+def _parse_qa_pairs_from_expansion(content: str) -> list[dict[str, str]]:
+    """Extract Q/A pairs from the 复习问答 section of AI expansion content."""
+    import re
+
+    if not content:
+        return []
+
+    # Locate the 复习问答 section — match heading or bold title, capture until next section heading or EOF
+    qa_section_match = re.search(
+        r"(?:^|\n)(?:#{1,4}\s*)?\*{0,2}复习问答[：:]?\*{0,2}\s*\n+(.*?)(?=\n+#{1,4}\s|\n+\*{0,2}(?:核心解释|关联知识|常见考法|易错提醒|复习问答)\*{0,2}|\Z)",
+        content,
+        re.DOTALL,
+    )
+    if not qa_section_match:
+        return []
+
+    qa_text = qa_section_match.group(1).strip()
+    if not qa_text:
+        return []
+
+    # Strip bold/strong markers to simplify matching
+    qa_clean = re.sub(r"\*{1,2}", "", qa_text)
+
+    pairs: list[dict[str, str]] = []
+    # Match Q/A pairs: "Q1: ...\nA1: ..." or "Q：...\nA：..."
+    qa_pattern = re.compile(
+        r"Q\d*[：:]\s*(.+?)\s*\n\s*A\d*[：:]\s*(.+?)(?=\n\s*Q\d*[：:]|\Z)",
+        re.DOTALL,
+    )
+    for match in qa_pattern.finditer(qa_clean):
+        question = match.group(1).strip()
+        answer = match.group(2).strip()
+        if question and answer:
+            pairs.append({"question": question, "answer": answer})
+
+    return pairs
+
+
 def _render_repository_ai_tools(point):
     """Render visible per-item AI expansion controls with preview-before-save."""
     knowledge_id = point.get("id")
@@ -3023,9 +3061,59 @@ def _render_repository_ai_tools(point):
             st.rerun()
 
     draft_expansion = st.session_state.get(draft_key)
+    expansion_content = draft_expansion or stored_expansion
     if draft_expansion:
         st.markdown("**AI 发散预览**")
         st.markdown(draft_expansion)
+    elif stored_expansion:
+        st.markdown("**已保存的 AI 发散内容**")
+        if point.get("review_generated_at"):
+            st.caption(f"生成时间：{point.get('review_generated_at')}")
+        st.markdown(stored_expansion)
+
+    # ── 复习问答 → 错题本 ──
+    if expansion_content:
+        qa_pairs = _parse_qa_pairs_from_expansion(expansion_content)
+        if qa_pairs:
+            st.markdown("---")
+            st.caption("📋 复习问答 · 点击下方按钮将题目添加到错题本")
+            for i, qa in enumerate(qa_pairs):
+                st.markdown(
+                    f"**Q{i + 1}：**{qa['question']}\n\n"
+                    f"**A{i + 1}：**{qa['answer']}"
+                )
+                if st.button(
+                    "添加到错题本",
+                    key=f"add_qa_wrong_{knowledge_id}_{i}",
+                    use_container_width=True,
+                ):
+                    user_id = st.session_state.get("user_id", 1)
+                    subject = point.get("subject") or ""
+                    chapter_name = point.get("chapter_name") or ""
+                    knowledge_name = point.get("knowledge_name") or ""
+                    bulk_create_wrong_questions(
+                        user_id,
+                        [
+                            {
+                                "question": qa["question"],
+                                "correct_answer": qa["answer"],
+                                "user_answer": "",
+                                "explanation": f"来源：{knowledge_name}（{chapter_name}）\n\n{qa['answer']}",
+                                "subject": subject,
+                                "chapter_name": chapter_name,
+                                "tags": [knowledge_name, "AI发散复习问答"],
+                                "source_text": "",
+                                "source_filename": "",
+                                "source_file_type": "",
+                            }
+                        ],
+                    )
+                    st.toast(f"已添加复习题 Q{i + 1} 到错题本", icon="✅")
+                    import time
+                    time.sleep(0.8)
+                    st.rerun()
+
+    if draft_expansion:
         save_col, discard_col = st.columns(2)
         with save_col:
             if st.button(
@@ -3045,11 +3133,6 @@ def _render_repository_ai_tools(point):
             ):
                 st.session_state.pop(draft_key, None)
                 st.rerun()
-    elif stored_expansion:
-        st.markdown("**已保存的 AI 发散内容**")
-        if point.get("review_generated_at"):
-            st.caption(f"生成时间：{point.get('review_generated_at')}")
-        st.markdown(stored_expansion)
 
 
 def _delete_subject_source(user_id, material_id):
@@ -3094,7 +3177,7 @@ def _auto_index_material(user_id, result, *, replace_existing=False):
         max_points = min(48, max(configured_max_points, max(24, round(outline_items / 4))))
 
     def llm_callable(prompt):
-        if not os.environ.get("AI_API_KEY", "").strip():
+        if not API_KEY:
             raise RuntimeError("未配置 AI_API_KEY，使用本地规则整理")
         return _call_llm_api(prompt, max_tokens=6400 if is_syllabus_outline else 2600)
 
@@ -3315,7 +3398,7 @@ def _answer_subject_question(user_id, subject, source_ids, question):
     if not source_blocks:
         return "已选资料暂时没有可用文字，请在高级校对区检查识别结果。"
 
-    if not os.environ.get("AI_API_KEY", "").strip():
+    if not API_KEY:
         compact = "\n\n".join(source_blocks)
         terms = [term for term in question.replace("？", " ").replace("，", " ").split() if len(term) >= 2]
         matches = []

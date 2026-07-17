@@ -19,7 +19,7 @@ class LlmGatewayConfig:
 
 def load_gateway_config() -> LlmGatewayConfig:
     return LlmGatewayConfig(
-        api_key=os.environ.get("AI_API_KEY", "").strip(),
+        api_key=os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip(),
         api_base=os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip(),
         default_model=os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5",
     )

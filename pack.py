@@ -28,7 +28,7 @@ core_files = [
     "requirements.txt", "requirements_kb.txt", "SETUP.md", "SETUP_kb.md", "DEPLOY.md",
     "app_kb.py", "preview_wrongbook.bak.html", "wrongbook_utils.py",
 ]
-bat_files = ["启动.bat", "启动考研RAG_Streamlit.bat"]
+bat_files = ["启动.bat", "管理进程.bat"]
 for f in core_files + bat_files:
     src = ROOT / f
     if src.exists():
@@ -111,6 +111,24 @@ if essay_imgs.exists():
             shutil.copy2(f, dest / f.name)
             img_count += 1
     print(f"    {img_count} essay images copied")
+
+# 拷贝 KaTeX 本地渲染文件
+katex_dir = ROOT / "data" / "katex"
+if katex_dir.exists():
+    dest = PACK_DIR / "data" / "katex"
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in katex_dir.iterdir():
+        if f.is_file():
+            shutil.copy2(f, dest / f.name)
+    print("    katex/ copied")
+
+# 拷贝 Pandoc DOCX 模板
+template_docx = ROOT / "data" / "reference" / "template.docx"
+if template_docx.exists():
+    dest = PACK_DIR / "data" / "reference"
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(template_docx, dest / "template.docx")
+    print("    template.docx copied")
 
 # 打 ZIP（UTF-8 编码，跨平台兼容 Linux unzip）
 print(f"\nCreating {ZIP_FILE.name}...")
